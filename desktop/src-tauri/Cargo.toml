@@ -1,0 +1,20 @@
+[package]
+name = "helpscribe_desktop"
+version = "0.1.16"
+description = "HelpScribe cross-platform desktop app"
+authors = ["HelpScribe"]
+license = "Proprietary"
+edition = "2021"
+rust-version = "1.77"
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+tauri = { version = "2", features = [] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+[features]
+default = ["custom-protocol"]
+custom-protocol = ["tauri/custom-protocol"]

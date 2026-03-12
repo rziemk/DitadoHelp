@@ -1,0 +1,170 @@
+<!doctype html>
+<html lang="pt-BR">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>HelpScribe Desktop</title>
+    <link rel="stylesheet" href="/src/styles.css" />
+  </head>
+  <body>
+    <div class="app-shell">
+      <header class="topbar card">
+        <div class="left-brand">
+          <div class="brand-mark">●</div>
+          <div>
+            <div class="brand">HelpScribe</div>
+            <div class="sub">Ditado com colagem automática e pipeline com LLM.</div>
+          </div>
+          <div class="app-version" id="appVersion">v0.0.0</div>
+          <div class="ready" id="readyChip">Pronto</div>
+          <div class="top-wave-wrap" aria-label="Indicador de gravação">
+            <canvas id="wave" height="32"></canvas>
+          </div>
+        </div>
+
+        <div class="top-actions">
+          <select id="uiLanguage" class="field compact">
+            <option value="pt">🇧🇷 PT</option>
+            <option value="en">🇺🇸 EN</option>
+            <option value="fr">🇫🇷 FR</option>
+            <option value="es">🇪🇸 ES</option>
+            <option value="de">🇩🇪 DE</option>
+          </select>
+          <button id="configBtn" class="btn ghost">⚙ Configurações</button>
+        </div>
+      </header>
+
+      <div id="configPopover" class="popover hidden card" role="dialog" aria-modal="false">
+        <div class="popover-title">Configurações</div>
+
+        <details open>
+          <summary>STT</summary>
+          <label>STT API Key</label>
+          <div class="key-row">
+            <input id="sttKey" type="password" class="field" placeholder="sk-..." />
+            <button id="toggleSttKey" class="btn ghost small">👁</button>
+          </div>
+          <label>Modelo STT</label>
+          <input id="sttModel" class="field" value="gpt-4o-mini-transcribe" />
+          <button id="testConnection" class="btn secondary">Testar conexão</button>
+        </details>
+
+        <details open>
+          <summary>LLM</summary>
+          <label>Provider</label>
+          <select id="llmProvider" class="field">
+            <option value="openai">OpenAI</option>
+            <option value="gemini">Gemini</option>
+            <option value="grok">Grok</option>
+          </select>
+          <label>LLM API Key</label>
+          <input id="llmKey" type="password" class="field" placeholder="(opcional)" />
+          <label>Modelo LLM</label>
+          <input id="llmModel" class="field" value="gpt-4.1-mini" />
+        </details>
+
+        <details open>
+          <summary>Tradução</summary>
+          <label>Idioma de tradução</label>
+          <select id="translationLang" class="field">
+            <option value="en">Inglês</option>
+            <option value="pt">Português</option>
+            <option value="es">Espanhol</option>
+            <option value="fr">Francês</option>
+            <option value="de">Alemão</option>
+          </select>
+        </details>
+
+        <div class="switches">
+          <label><input id="sameKey" type="checkbox" checked /> Usar mesma STT key para LLM</label>
+          <label><input id="useFreeFallback" type="checkbox" checked /> Se não houver key, usar fallback simples</label>
+        </div>
+
+        <div class="popover-footer">
+          <button id="saveConfig" class="btn primary">Salvar configurações</button>
+          <span id="saveFeedback" class="save-feedback"></span>
+        </div>
+      </div>
+
+      <section class="card actionbar">
+        <div class="left-actions">
+          <button id="btnDictate" class="btn secondary"><span class="dot"></span>Gravar <span class="kbd">F8</span></button>
+          <button id="btnRewrite" class="btn secondary"><span class="dot"></span>Reescrever <span class="kbd">F9</span></button>
+          <button id="btnRewriteLlm" class="btn secondary"><span class="dot"></span>Reescrever com LLM <span class="kbd">F12</span></button>
+          <button id="btnCodex" class="btn secondary"><span class="dot"></span>Escreve Prompt <span class="kbd">F11</span></button>
+          <button id="btnTranslate" class="btn secondary"><span class="dot"></span>Traduzir <span class="kbd">F10</span></button>
+          <span id="recordingTag" class="recording-tag hidden">Gravando</span>
+        </div>
+
+        <div class="right-actions action-meta">
+          <label class="inline-label">Traduzir para:</label>
+          <select id="translationLangTop" class="field compact"></select>
+          <span id="assistMode" class="assist-mode-inline">Modo: Ditar</span>
+          <span id="assistHint" class="assist-hint-inline">F8/F9/F10/F11/F12</span>
+          <span id="assistState" class="assist-state-inline">Aguardando próximo ditado</span>
+        </div>
+      </section>
+
+      <div id="noticeBar" class="notice hidden" role="status" aria-live="polite"></div>
+
+      <main class="content-grid">
+        <section class="card editor-card">
+          <div class="editor-head">
+            <div>
+              <strong>Texto final</strong>
+              <span class="muted">Dite, revise e publique — sem fricção.</span>
+            </div>
+            <div id="metrics" class="muted">Palavras: 0 | Tokens (est.): 0</div>
+          </div>
+
+          <textarea id="resultText" class="result" placeholder="Comece a ditar..."></textarea>
+
+          <div class="editor-actions">
+            <select id="textAction" class="field compact">
+              <option value="rewrite_prompt">Reescrever prompt</option>
+              <option value="retranslate">Retraduzir</option>
+              <option value="rewrite_text">Reescrever texto</option>
+            </select>
+            <button id="applyTextAction" class="btn secondary">Aplicar</button>
+            <button id="stopBtn" class="btn danger">Parar +/- Enter</button>
+            <button id="copyResult" class="btn ghost">Copiar resultado</button>
+            <button id="copyStatus" class="btn ghost">Copiar status</button>
+          </div>
+        </section>
+
+        <section class="dock-grid">
+          <div class="card tabs-card">
+            <div class="tabs-header">
+              <button class="tab active" data-tab="history">Histórico</button>
+              <button class="tab" data-tab="status">Status Log</button>
+            </div>
+
+            <div id="historyTab" class="tab-content active">
+              <div id="historyList" class="history-list"></div>
+              <div class="history-actions">
+                <button id="historyUse" class="btn secondary">Inserir</button>
+                <button id="historyCopy" class="btn ghost">Copiar</button>
+              </div>
+            </div>
+
+            <div id="statusTab" class="tab-content">
+              <pre id="statusLog" class="status-log"></pre>
+            </div>
+          </div>
+
+          <div class="card chat-card">
+            <div class="card-title">Consulta LLM</div>
+            <textarea id="chatPrompt" class="chat-input" placeholder="Pergunte para o GPT/LLM aqui..."></textarea>
+            <div class="chat-actions">
+              <button id="chatAsk" class="btn secondary"><span class="dot"></span>Perguntar</button>
+              <button id="chatClear" class="btn ghost">Limpar</button>
+            </div>
+            <pre id="chatAnswer" class="chat-answer">A resposta vai aparecer aqui.</pre>
+          </div>
+        </section>
+      </main>
+    </div>
+
+    <script type="module" src="/src/main.js"></script>
+  </body>
+</html>
