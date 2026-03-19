@@ -1,4 +1,8 @@
-# HelpScribe
+# Scribeflowai
+
+## Qual versão abrir
+- UI **mais nova** (igual ao layout com `Consulta LLM` e `Reescrever com LLM F12`): rode `desktop/` (`npm run dev` ou `npm run tauri:dev`).
+- UI **legada** em Tkinter: rode `python app.py`.
 
 Aplicativo desktop (Python + Tkinter) para:
 1. Iniciar/parar gravacao por atalho
@@ -9,7 +13,7 @@ Aplicativo desktop (Python + Tkinter) para:
 
 ## Interface
 Ao executar `python app.py`, abre uma janela com:
-- Nome e icone da aplicacao: `HelpScribe` (logo de microfone no cabecalho)
+- Nome e icone da aplicacao: `Scribeflowai` (logo de microfone no cabecalho)
 - Campo `OPENAI_API_KEY (STT)` para speech-to-text
 - Seletor de LLM de texto: `free` (padrao), `openai`, `gemini`, `grok`
 - Seletor de idioma da traducao: `Português`, `Inglês`, `Espanhol`, `Francês`, `Alemão`
@@ -43,6 +47,7 @@ Durante a gravacao, o app mostra um painel visual no proprio app:
 - `F9`: ditado + reescrita pela LLM selecionada
 - `F10`: ditado + traducao para o idioma selecionado na interface
 - `F11`: ditado + geracao de prompt no estilo Codex
+- `F12`: atalho alternativo para ditado + reescrita
 - `Enter` ou `Espaco`: para gravacao em andamento
 
 Observacao de estabilidade no macOS:

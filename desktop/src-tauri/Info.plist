@@ -3,6 +3,6 @@
 <plist version="1.0">
   <dict>
     <key>NSMicrophoneUsageDescription</key>
-    <string>HelpScribe precisa do microfone para capturar ditado de voz.</string>
+    <string>Scribeflowai precisa do microfone para capturar ditado de voz.</string>
   </dict>
 </plist>

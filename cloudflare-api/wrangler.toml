@@ -1,0 +1,23 @@
+name = "scribeflowai-api"
+main = "src/index.js"
+compatibility_date = "2026-03-13"
+workers_dev = true
+
+[observability.logs]
+enabled = true
+
+[[d1_databases]]
+binding = "DB"
+database_name = "scribeflowai-prod"
+database_id = "375d669b-0adb-4c82-9478-6c129e44f30f"
+
+[vars]
+APP_NAME = "Scribeflowai"
+APP_URL = ""
+API_BASE_URL = "https://api.scribeflowai.com"
+MAGIC_LINK_TTL_MINUTES = "20"
+DEBUG_MAGIC_LINKS = "0"
+
+[[routes]]
+pattern = "api.scribeflowai.com"
+custom_domain = true

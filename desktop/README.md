@@ -1,6 +1,6 @@
-# HelpScribe Desktop (Tauri)
+# Scribeflowai Desktop (Tauri)
 
-Base cross-platform do HelpScribe (Mac/Windows/Linux).
+Base cross-platform do Scribeflowai (Mac/Windows/Linux).
 
 ## Pré-requisitos
 - Node.js + npm
