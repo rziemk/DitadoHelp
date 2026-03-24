@@ -1,7 +1,7 @@
 {
   "name": "scribeflowai-desktop",
   "private": true,
-  "version": "0.1.28",
+  "version": "0.1.29",
   "type": "module",
   "scripts": {
     "dev": "vite",
@@ -9,7 +9,8 @@
     "test:smoke": "npm run build && cargo check --manifest-path src-tauri/Cargo.toml",
     "preview": "vite preview",
     "tauri:dev": "tauri dev",
-    "tauri:build": "tauri build"
+    "tauri:build": "tauri build",
+    "release:macos": "bash ./scripts/macos-release.sh"
   },
   "devDependencies": {
     "@tauri-apps/cli": "^2.0.0",
