@@ -11,6 +11,7 @@ venv/
 
 # Local config/secrets
 .env
+desktop/.env.macos.local
 
 # macOS
 .DS_Store

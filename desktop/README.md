@@ -32,6 +32,29 @@ cd desktop
 npm run tauri:build
 ```
 
+## Build macOS valida
+Para parar o aviso do macOS de app "nao valido", o app precisa sair assinado e notarizado.
+
+Setup mais simples no projeto:
+```bash
+cd desktop
+cp .env.macos.example .env.macos.local
+```
+
+Preencha `desktop/.env.macos.local` com:
+- `APPLE_SIGNING_IDENTITY`
+- e uma das opcoes de notarizacao:
+  - `APPLE_API_ISSUER`, `APPLE_API_KEY`, `APPLE_API_KEY_PATH`
+  - ou `APPLE_ID`, `APPLE_PASSWORD`, `APPLE_TEAM_ID`
+
+Depois rode:
+```bash
+cd desktop
+npm run release:macos
+```
+
+Esse comando valida as variaveis e executa o `tauri build` pronto para assinatura/notarizacao no macOS.
+
 ## Auto-update
 O projeto já está com seção de updater no `src-tauri/tauri.conf.json`, porém `active: false`.
 
