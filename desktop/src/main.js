@@ -238,7 +238,11 @@ const el = {
   callAnalysisPanel: document.getElementById('callAnalysisPanel'),
   dockGrid: document.querySelector('.dock-grid'),
   loadAudioFileBtn: document.getElementById('loadAudioFileBtn'),
+  toggleTranscriptHistoryBtn: document.getElementById('toggleTranscriptHistoryBtn'),
+  fileTranscriptHistoryPanel: document.getElementById('fileTranscriptHistoryPanel'),
+  fileTranscriptHistoryList: document.getElementById('fileTranscriptHistoryList'),
   selectedAudioFile: document.getElementById('selectedAudioFile'),
+  audioTranscriptOutput: document.getElementById('audioTranscriptOutput'),
   autoSummaryFromAudio: document.getElementById('autoSummaryFromAudio'),
   audioSummaryOutput: document.getElementById('audioSummaryOutput'),
   chooseAutoImportDirBtn: document.getElementById('chooseAutoImportDirBtn'),
@@ -607,6 +611,11 @@ function wireEvents() {
     await withButtonLoading(el.loadAudioFileBtn, 'Transcrevendo...', async () => {
       await transcribeAudioFileFromDisk();
     });
+  });
+
+  el.toggleTranscriptHistoryBtn.addEventListener('click', () => {
+    el.fileTranscriptHistoryPanel.classList.toggle('hidden');
+    renderFileTranscriptHistory();
   });
 
   el.chooseAutoImportDirBtn.addEventListener('click', async () => {
@@ -2083,6 +2092,7 @@ async function processAudioFilePath(filePath, fromAutomation = false) {
   const fileName = filePath.split('/').pop()?.split('\\').pop() || 'audio';
   const fileExt = fileName.includes('.') ? fileName.split('.').pop().toLowerCase() : 'mp3';
   el.selectedAudioFile.textContent = fileName;
+  el.audioTranscriptOutput.value = '';
   el.audioSummaryOutput.textContent = 'Lendo arquivo de áudio...';
 
   const strings = UI_STRINGS[state.config.uiLanguage] || UI_STRINGS.pt;
@@ -2109,6 +2119,7 @@ async function processAudioFilePath(filePath, fromAutomation = false) {
     if (!rawText) throw new Error('Transcrição vazia para o arquivo selecionado.');
 
     const finalText = rawText.trim();
+    el.audioTranscriptOutput.value = finalText;
     el.audioSummaryOutput.textContent = state.config.autoSummaryFromAudio
       ? 'Transcrição pronta. Gerando resumo...'
       : 'Transcrição pronta.';
@@ -2120,13 +2131,12 @@ async function processAudioFilePath(filePath, fromAutomation = false) {
       const summary = await summarizeTranscript(finalText, state.abortController.signal);
       if (summary) {
         el.audioSummaryOutput.textContent = summary;
-        el.chatAnswer.textContent = summary;
         addHistory(`Resumo de ${fileName}\n\n${summary}`, 'chat', finalText, { source: 'audio_summary', fileName, filePath });
         log('[llm] Resumo automático da transcrição gerado.');
       }
     }
+    renderFileTranscriptHistory();
     state.autoImportSeen.add(filePath);
-    setWorkspaceView('main');
   } catch (err) {
     if (err?.name === 'AbortError') {
       log('[proc] Transcrição de arquivo cancelada.');
@@ -2874,6 +2884,40 @@ function renderHistory() {
     });
 
     el.historyList.appendChild(row);
+  });
+}
+
+function renderFileTranscriptHistory() {
+  if (!el.fileTranscriptHistoryList) return;
+  const items = state.history.filter((item) => (
+    item?.meta?.source === 'file_upload' ||
+    item?.meta?.source === 'audio_summary' ||
+    item?.meta?.source === 'auto_calls'
+  ));
+
+  el.fileTranscriptHistoryList.innerHTML = '';
+  if (!items.length) {
+    el.fileTranscriptHistoryList.textContent = 'Nenhuma transcrição carregada ainda.';
+    return;
+  }
+
+  items.slice(0, 50).forEach((item) => {
+    const row = document.createElement('button');
+    row.type = 'button';
+    row.className = 'file-transcript-history-item';
+    row.innerHTML = `
+      <span>${escapeHtml(item.meta?.fileName || item.action)}</span>
+      <small>${escapeHtml(item.text.slice(0, 90))}${item.text.length > 90 ? '...' : ''}</small>
+    `;
+    row.addEventListener('click', () => {
+      if (item.meta?.source === 'audio_summary') {
+        el.audioSummaryOutput.textContent = item.text;
+        return;
+      }
+      el.audioTranscriptOutput.value = item.text;
+      el.selectedAudioFile.textContent = item.meta?.fileName || 'Histórico selecionado.';
+    });
+    el.fileTranscriptHistoryList.appendChild(row);
   });
 }
 

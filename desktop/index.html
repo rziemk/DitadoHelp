@@ -205,18 +205,38 @@
 
         <section id="workflowPanel" class="card workflow-panel hidden">
           <div id="fileTranscriptPanel" class="workflow-view">
-            <div class="file-transcript-panel">
-              <div class="file-transcript-title">Carregar gravação para transcrição</div>
-              <div class="file-transcript-hint">Suporta MP3, WAV, M4A, MP4, OGG, OPUS e WEBM.</div>
-              <div class="inline-actions">
-                <button id="loadAudioFileBtn" class="btn secondary">Carregar áudio e transcrever</button>
-              </div>
-              <label class="editor-toggle file-transcript-toggle">
-                <input id="autoSummaryFromAudio" type="checkbox" />
-                Gerar resumo automático após transcrever
-              </label>
-              <div id="selectedAudioFile" class="file-transcript-selected">Nenhum arquivo selecionado.</div>
-              <pre id="audioSummaryOutput" class="audio-summary-output">Resumo da transcrição aparecerá aqui.</pre>
+            <div class="file-transcript-workspace">
+              <section class="file-transcript-main">
+                <div class="file-transcript-toolbar">
+                  <div>
+                    <div class="file-transcript-title">Carregar gravação para transcrição</div>
+                    <div class="file-transcript-hint">Suporta MP3, WAV, M4A, MP4, OGG, OPUS e WEBM.</div>
+                  </div>
+                  <div class="inline-actions">
+                    <button id="loadAudioFileBtn" class="btn secondary">Carregar áudio e transcrever</button>
+                    <button id="toggleTranscriptHistoryBtn" class="btn ghost">Histórico</button>
+                  </div>
+                </div>
+                <label class="editor-toggle file-transcript-toggle">
+                  <input id="autoSummaryFromAudio" type="checkbox" />
+                  Gerar resumo automático após transcrever
+                </label>
+                <div id="selectedAudioFile" class="file-transcript-selected">Nenhum arquivo selecionado.</div>
+                <div class="file-transcript-result-grid">
+                  <div class="file-transcript-section">
+                    <div class="file-transcript-title">Transcrição</div>
+                    <textarea id="audioTranscriptOutput" class="audio-transcript-output" placeholder="A transcrição aparecerá aqui."></textarea>
+                  </div>
+                  <div class="file-transcript-section">
+                    <div class="file-transcript-title">Resumo</div>
+                    <pre id="audioSummaryOutput" class="audio-summary-output">Resumo da transcrição aparecerá aqui.</pre>
+                  </div>
+                </div>
+              </section>
+              <aside id="fileTranscriptHistoryPanel" class="file-transcript-history hidden">
+                <div class="file-transcript-title">Histórico</div>
+                <div id="fileTranscriptHistoryList" class="file-transcript-history-list"></div>
+              </aside>
             </div>
           </div>
 
