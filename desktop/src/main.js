@@ -4,7 +4,7 @@ import { exists, mkdir, readDir, readFile, readTextFile, writeFile, writeTextFil
 
 const STORAGE_KEY = 'scribeflowai.desktop.config.v2';
 const LEGACY_STORAGE_KEYS = ['helpscribe.desktop.config.v2', 'helpscribe.desktop.config.v1'];
-const APP_VERSION = '0.1.33';
+const APP_VERSION = '0.1.34';
 const HISTORY_FILE_NAME = 'conversations.jsonl';
 const HISTORY_SUBDIR = 'Scribeflowai';
 const HISTORY_LIMIT = 200;
@@ -2122,11 +2122,13 @@ async function processAudioFilePath(filePath, fromAutomation = false) {
     if (!rawText) throw new Error('Transcrição vazia para o arquivo selecionado.');
 
     const finalText = rawText.trim();
-    el.audioTranscriptOutput.value = finalText;
+    el.audioTranscriptOutput.value = 'Identificando interlocutores...';
+    const displayTranscript = await diarizeTranscriptSemantically(finalText, state.abortController.signal);
+    el.audioTranscriptOutput.value = displayTranscript || finalText;
     el.audioSummaryOutput.textContent = state.config.autoSummaryFromAudio
       ? 'Transcrição pronta. Gerando resumo...'
       : 'Transcrição pronta.';
-    addHistory(finalText, 'dictate', rawText, { source: fromAutomation ? 'auto_calls' : 'file_upload', fileName, filePath });
+    addHistory(displayTranscript || finalText, 'dictate', rawText, { source: fromAutomation ? 'auto_calls' : 'file_upload', fileName, filePath });
     log(`[stt] Arquivo "${fileName}" transcrito com sucesso.`);
     if (state.config.autoSummaryFromAudio) {
       try {
@@ -2175,7 +2177,8 @@ async function summarizeTranscript(text, signal) {
     '1) contexto geral\n' +
     '2) pontos principais\n' +
     '3) decisões tomadas\n' +
-    '4) próximos passos acionáveis.\n\n' +
+    '4) próximos passos acionáveis\n' +
+    '5) encerramento da ligação: diga claramente se a conversa terminou normalmente, se alguém desligou, se a ligação caiu ou se o áudio parece ter sido cortado antes do fim.\n\n' +
     `Transcrição:\n${trimmed}`;
   return await llmComplete(prompt, signal);
 }
@@ -2189,6 +2192,7 @@ function summarizeTranscriptLocal(text) {
   if (lower.includes('validação') || lower.includes('validacao')) topics.push('foi solicitada uma validação de dados');
   if (lower.includes('nascimento')) topics.push('foi pedido o dia e mês de nascimento');
   if (lower.includes('cadastro')) topics.push('houve conferência de cadastro');
+  const looksInterrupted = /preciso|pode me|confirma|confirmar|qual|quando|dia|m[eê]s|nascimento[?.]?$/.test(lower);
   const topicText = topics.length ? topics.join('; ') : 'a conversa teve caráter operacional e curto';
   return [
     '**Resumo da ligação:**',
@@ -2196,6 +2200,11 @@ function summarizeTranscriptLocal(text) {
     '',
     '**Resultado observado:**',
     'A pessoa atendente iniciou a conversa, informou o contexto e pediu confirmação de dados para continuidade do atendimento.',
+    '',
+    '**Encerramento:**',
+    looksInterrupted
+      ? 'A conversa parece incompleta: ela parou durante a etapa de validação, sem resposta final do cliente e sem fechamento natural da ligação.'
+      : 'Não há sinais suficientes de fechamento formal da ligação na transcrição.',
     '',
     '**Observação:** resumo local gerado porque a LLM não retornou o resumo avançado neste momento.',
   ].join('\n');
