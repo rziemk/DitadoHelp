@@ -1764,7 +1764,7 @@ async function transcribe(blob, signal) {
   if (!sttKey) throw new Error('Defina STT API Key.');
   const fd = new FormData();
   fd.append('model', state.config.sttModel || defaultConfig.sttModel);
-  const ext = state.recordingExt || mimeToExt(blob.type || '') || 'webm';
+  const ext = uploadAudioExt(state.recordingExt || mimeToExt(blob.type || '') || 'webm');
   fd.append('file', blob, `audio.${ext}`);
   fd.append('response_format', 'text');
   fd.append('language', 'pt');
@@ -1782,6 +1782,10 @@ async function transcribe(blob, signal) {
   }
 
   return (await resp.text()).trim();
+}
+
+function uploadAudioExt(ext) {
+  return String(ext || '').toLowerCase() === 'opus' ? 'ogg' : ext;
 }
 
 async function transcribeAudioFileFromDisk() {
