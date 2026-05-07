@@ -1793,7 +1793,7 @@ async function transcribeAudioFileFromDisk() {
   const selected = await openDialog({
     multiple: false,
     directory: false,
-    filters: [{ name: 'Audio', extensions: ['mp3', 'wav', 'm4a', 'mp4', 'ogg', 'webm'] }],
+    filters: [{ name: 'Audio', extensions: ['mp3', 'wav', 'm4a', 'mp4', 'ogg', 'opus', 'webm'] }],
   });
   if (!selected || typeof selected !== 'string') return;
   await processAudioFilePath(selected, false);
@@ -2017,7 +2017,7 @@ async function persistLocalCallRecording(blob, ext) {
 }
 
 function isSupportedAudioFile(filePath = '') {
-  return /\.(mp3|wav|m4a|mp4|ogg|webm)$/i.test(filePath);
+  return /\.(mp3|wav|m4a|mp4|ogg|opus|webm)$/i.test(filePath);
 }
 
 function restartAutoImportMonitor() {
@@ -2096,6 +2096,7 @@ async function processAudioFilePath(filePath, fromAutomation = false) {
       m4a: 'audio/mp4',
       mp4: 'audio/mp4',
       ogg: 'audio/ogg',
+      opus: 'audio/ogg',
       webm: 'audio/webm',
     };
     const blob = new Blob([bytes], { type: mimeTypeByExt[fileExt] || 'audio/mpeg' });
@@ -2230,7 +2231,7 @@ async function addCallAnalysisFile() {
   const selected = await openDialog({
     multiple: true,
     directory: false,
-    filters: [{ name: 'Audio', extensions: ['mp3', 'wav', 'm4a', 'mp4', 'ogg', 'webm'] }],
+    filters: [{ name: 'Audio', extensions: ['mp3', 'wav', 'm4a', 'mp4', 'ogg', 'opus', 'webm'] }],
   });
   if (!selected) return;
   upsertCallAnalysisFiles(Array.isArray(selected) ? selected : [selected]);
@@ -2298,6 +2299,7 @@ async function transcribeCallAnalysisItem(item) {
       m4a: 'audio/mp4',
       mp4: 'audio/mp4',
       ogg: 'audio/ogg',
+      opus: 'audio/ogg',
       webm: 'audio/webm',
     };
     const blob = new Blob([bytes], { type: mimeTypeByExt[fileExt] || 'audio/mpeg' });
@@ -2404,6 +2406,7 @@ function mimeToExt(mime) {
   if (mime.includes('mp4')) return 'mp4';
   if (mime.includes('mpeg')) return 'mp3';
   if (mime.includes('ogg')) return 'ogg';
+  if (mime.includes('opus')) return 'opus';
   if (mime.includes('wav')) return 'wav';
   return 'webm';
 }
