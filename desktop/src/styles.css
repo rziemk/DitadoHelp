@@ -462,6 +462,105 @@ body {
   white-space: pre-wrap;
   min-height: 76px;
 }
+.call-analysis-layout {
+  min-height: 0;
+  height: 100%;
+  display: grid;
+  grid-template-columns: minmax(220px, 300px) minmax(0, 1fr);
+  gap: 10px;
+}
+.call-analysis-list,
+.call-analysis-workspace,
+.call-analysis-card {
+  min-height: 0;
+}
+.call-analysis-list {
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 10px;
+  background: #fff;
+  display: grid;
+  grid-template-rows: auto auto 1fr;
+  gap: 10px;
+}
+.call-analysis-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+.call-analysis-items {
+  min-height: 0;
+  overflow: auto;
+  display: grid;
+  align-content: start;
+  gap: 6px;
+}
+.call-analysis-item {
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--soft);
+  padding: 8px;
+  text-align: left;
+  display: grid;
+  gap: 4px;
+  cursor: pointer;
+}
+.call-analysis-item.selected {
+  border-color: var(--primary);
+  background: #eef5ff;
+}
+.call-analysis-file {
+  font-size: 13px;
+  font-weight: 700;
+  color: #1e293b;
+  overflow-wrap: anywhere;
+}
+.call-analysis-status {
+  font-size: 12px;
+  color: #64748b;
+}
+.call-analysis-workspace {
+  display: grid;
+  grid-template-rows: auto 1fr;
+  gap: 10px;
+}
+.call-analysis-card {
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: #fff;
+  padding: 10px;
+  display: grid;
+  gap: 8px;
+}
+.call-expected-input {
+  width: 100%;
+  min-height: 110px;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 10px;
+  resize: vertical;
+  background: #fff;
+  font: inherit;
+}
+.call-analysis-output-grid {
+  min-height: 0;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  gap: 10px;
+}
+.call-analysis-output {
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 10px;
+  margin: 0;
+  background: #fff;
+  overflow: auto;
+  font-size: 13px;
+  line-height: 1.45;
+  white-space: pre-wrap;
+  min-height: 0;
+}
 
 .chat-card {
   min-width: 0;

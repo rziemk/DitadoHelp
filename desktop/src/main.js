@@ -155,6 +155,8 @@ const state = {
   localCallMimeType: '',
   localCallExt: 'webm',
   isLocalCallRecording: false,
+  callAnalyses: [],
+  selectedCallAnalysis: null,
 };
 
 const el = {
@@ -215,6 +217,7 @@ const el = {
   btnTranslate: document.getElementById('btnTranslate'),
   btnFileTranscriptMode: document.getElementById('btnFileTranscriptMode'),
   btnAutoCallsMode: document.getElementById('btnAutoCallsMode'),
+  btnCallAnalysisMode: document.getElementById('btnCallAnalysisMode'),
   btnBackToMain: document.getElementById('btnBackToMain'),
   btnCodex: document.getElementById('btnCodex'),
   recordingTag: document.getElementById('recordingTag'),
@@ -232,6 +235,7 @@ const el = {
   workflowPanel: document.getElementById('workflowPanel'),
   fileTranscriptPanel: document.getElementById('fileTranscriptPanel'),
   autoCallsPanel: document.getElementById('autoCallsPanel'),
+  callAnalysisPanel: document.getElementById('callAnalysisPanel'),
   dockGrid: document.querySelector('.dock-grid'),
   loadAudioFileBtn: document.getElementById('loadAudioFileBtn'),
   selectedAudioFile: document.getElementById('selectedAudioFile'),
@@ -246,6 +250,18 @@ const el = {
   startLocalCallRecordingBtn: document.getElementById('startLocalCallRecordingBtn'),
   stopLocalCallRecordingBtn: document.getElementById('stopLocalCallRecordingBtn'),
   localCallRecordingStatus: document.getElementById('localCallRecordingStatus'),
+  addCallAnalysisFileBtn: document.getElementById('addCallAnalysisFileBtn'),
+  addCallAnalysisFolderBtn: document.getElementById('addCallAnalysisFolderBtn'),
+  callAnalysisList: document.getElementById('callAnalysisList'),
+  callAnalysisCount: document.getElementById('callAnalysisCount'),
+  callExpectedPrompt: document.getElementById('callExpectedPrompt'),
+  transcribeSelectedCallBtn: document.getElementById('transcribeSelectedCallBtn'),
+  transcribeAllCallsBtn: document.getElementById('transcribeAllCallsBtn'),
+  runCallAnalysisBtn: document.getElementById('runCallAnalysisBtn'),
+  copyCallAnalysisBtn: document.getElementById('copyCallAnalysisBtn'),
+  selectedCallStatus: document.getElementById('selectedCallStatus'),
+  callTranscriptOutput: document.getElementById('callTranscriptOutput'),
+  callAnalysisOutput: document.getElementById('callAnalysisOutput'),
   historyList: document.getElementById('historyList'),
   historyUse: document.getElementById('historyUse'),
   historyCopy: document.getElementById('historyCopy'),
@@ -450,6 +466,7 @@ function wireEvents() {
   el.btnCodex.addEventListener('click', () => toggleRecord('codex'));
   el.btnFileTranscriptMode.addEventListener('click', () => setWorkspaceView('file-transcript'));
   el.btnAutoCallsMode.addEventListener('click', () => setWorkspaceView('auto-calls'));
+  el.btnCallAnalysisMode.addEventListener('click', () => setWorkspaceView('call-analysis'));
   el.btnBackToMain.addEventListener('click', () => setWorkspaceView('main'));
   el.stopBtn.addEventListener('click', handleStop);
 
@@ -630,6 +647,44 @@ function wireEvents() {
     state.config.autoImportCallsEnabled = el.enableAutoImport.checked;
     persistConfig();
     restartAutoImportMonitor();
+  });
+
+  el.addCallAnalysisFileBtn.addEventListener('click', async () => {
+    await withButtonLoading(el.addCallAnalysisFileBtn, 'Abrindo...', async () => {
+      await addCallAnalysisFile();
+    });
+  });
+
+  el.addCallAnalysisFolderBtn.addEventListener('click', async () => {
+    await withButtonLoading(el.addCallAnalysisFolderBtn, 'Abrindo...', async () => {
+      await addCallAnalysisFolder();
+    });
+  });
+
+  el.transcribeSelectedCallBtn.addEventListener('click', async () => {
+    await withButtonLoading(el.transcribeSelectedCallBtn, 'Transcrevendo...', async () => {
+      await transcribeSelectedCallAnalysis();
+    });
+  });
+
+  el.transcribeAllCallsBtn.addEventListener('click', async () => {
+    await withButtonLoading(el.transcribeAllCallsBtn, 'Transcrevendo...', async () => {
+      await transcribeAllCallAnalyses();
+    });
+  });
+
+  el.runCallAnalysisBtn.addEventListener('click', async () => {
+    await withButtonLoading(el.runCallAnalysisBtn, 'Analisando...', async () => {
+      await runSelectedCallComparison();
+    });
+  });
+
+  el.copyCallAnalysisBtn.addEventListener('click', async () => {
+    const item = selectedCallAnalysisItem();
+    const text = item?.analysis || '';
+    if (!text.trim()) return log('[calls] Sem análise para copiar.');
+    await navigator.clipboard.writeText(text);
+    log('[calls] Análise copiada.');
   });
 
   el.historyUse.addEventListener('click', () => {
@@ -2098,6 +2153,252 @@ async function summarizeTranscript(text, signal) {
   return await llmComplete(prompt, signal);
 }
 
+function callAnalysisId(filePath) {
+  return `${filePath}:${Date.now()}:${Math.random().toString(16).slice(2)}`;
+}
+
+function selectedCallAnalysisItem() {
+  if (state.selectedCallAnalysis == null) return null;
+  return state.callAnalyses[state.selectedCallAnalysis] || null;
+}
+
+function renderCallAnalysisList() {
+  el.callAnalysisList.innerHTML = '';
+  el.callAnalysisCount.textContent = `${state.callAnalyses.length} ${state.callAnalyses.length === 1 ? 'item' : 'itens'}`;
+
+  state.callAnalyses.forEach((item, index) => {
+    const row = document.createElement('button');
+    row.type = 'button';
+    row.className = `call-analysis-item${index === state.selectedCallAnalysis ? ' selected' : ''}`;
+    row.innerHTML = `
+      <span class="call-analysis-file">${escapeHtml(item.fileName)}</span>
+      <span class="call-analysis-status">${escapeHtml(item.status)}</span>
+    `;
+    row.addEventListener('click', () => {
+      state.selectedCallAnalysis = index;
+      renderCallAnalysisList();
+      renderSelectedCallAnalysis();
+    });
+    el.callAnalysisList.appendChild(row);
+  });
+
+  renderSelectedCallAnalysis();
+}
+
+function renderSelectedCallAnalysis() {
+  const item = selectedCallAnalysisItem();
+  if (!item) {
+    el.selectedCallStatus.textContent = 'Nenhuma ligação selecionada';
+    el.callExpectedPrompt.value = '';
+    el.callTranscriptOutput.textContent = 'A transcrição aparecerá aqui.';
+    el.callAnalysisOutput.textContent = 'A análise aparecerá aqui.';
+    return;
+  }
+
+  el.selectedCallStatus.textContent = item.status;
+  el.callExpectedPrompt.value = item.expected || '';
+  el.callTranscriptOutput.textContent = item.speakerTranscript || item.rawTranscript || 'Ainda sem transcrição.';
+  el.callAnalysisOutput.textContent = item.analysis || 'A análise aparecerá aqui.';
+}
+
+function upsertCallAnalysisFiles(filePaths) {
+  const existing = new Set(state.callAnalyses.map((item) => item.filePath));
+  filePaths
+    .filter((filePath) => isSupportedAudioFile(filePath) && !existing.has(filePath))
+    .forEach((filePath) => {
+      const fileName = filePath.split('/').pop()?.split('\\').pop() || 'audio';
+      state.callAnalyses.push({
+        id: callAnalysisId(filePath),
+        filePath,
+        fileName,
+        status: 'Pendente',
+        expected: '',
+        rawTranscript: '',
+        speakerTranscript: '',
+        analysis: '',
+        error: '',
+      });
+    });
+
+  if (state.selectedCallAnalysis == null && state.callAnalyses.length) {
+    state.selectedCallAnalysis = 0;
+  }
+  renderCallAnalysisList();
+}
+
+async function addCallAnalysisFile() {
+  const selected = await openDialog({
+    multiple: true,
+    directory: false,
+    filters: [{ name: 'Audio', extensions: ['mp3', 'wav', 'm4a', 'mp4', 'ogg', 'webm'] }],
+  });
+  if (!selected) return;
+  upsertCallAnalysisFiles(Array.isArray(selected) ? selected : [selected]);
+}
+
+async function addCallAnalysisFolder() {
+  const selected = await openDialog({ multiple: false, directory: true });
+  if (!selected || typeof selected !== 'string') return;
+  const entries = await readDir(selected);
+  upsertCallAnalysisFiles(
+    entries
+      .filter((entry) => entry?.isFile && typeof entry?.path === 'string')
+      .map((entry) => entry.path),
+  );
+}
+
+async function transcribeSelectedCallAnalysis() {
+  const item = selectedCallAnalysisItem();
+  if (!item) {
+    log('[calls] Selecione uma ligação para transcrever.');
+    return;
+  }
+  await transcribeCallAnalysisItem(item);
+  renderCallAnalysisList();
+}
+
+async function transcribeAllCallAnalyses() {
+  const pending = state.callAnalyses.filter((item) => !item.rawTranscript);
+  if (!pending.length) {
+    log('[calls] Nenhuma ligação pendente para transcrever.');
+    return;
+  }
+  for (const item of pending) {
+    await transcribeCallAnalysisItem(item);
+    renderCallAnalysisList();
+  }
+}
+
+async function transcribeCallAnalysisItem(item) {
+  if (!currentSttKey()) {
+    showNotice('Configure a STT API Key em Configurações para analisar ligações.', 'error');
+    log('[error] Configure STT API Key para analisar ligações.');
+    return;
+  }
+  if (state.isProcessing) {
+    log('[calls] Aguarde o processamento atual finalizar.');
+    return;
+  }
+
+  const strings = UI_STRINGS[state.config.uiLanguage] || UI_STRINGS.pt;
+  state.isProcessing = true;
+  state.abortController = new AbortController();
+  item.status = 'Transcrevendo';
+  item.error = '';
+  el.assistState.textContent = strings.processing;
+  renderCallAnalysisList();
+  refreshControls();
+
+  try {
+    const fileExt = item.fileName.includes('.') ? item.fileName.split('.').pop().toLowerCase() : 'mp3';
+    const bytes = await readFile(item.filePath);
+    const mimeTypeByExt = {
+      mp3: 'audio/mpeg',
+      wav: 'audio/wav',
+      m4a: 'audio/mp4',
+      mp4: 'audio/mp4',
+      ogg: 'audio/ogg',
+      webm: 'audio/webm',
+    };
+    const blob = new Blob([bytes], { type: mimeTypeByExt[fileExt] || 'audio/mpeg' });
+    state.recordingExt = fileExt;
+    item.rawTranscript = await transcribe(blob, state.abortController.signal);
+    if (!item.rawTranscript) throw new Error('Transcrição vazia para a ligação.');
+
+    item.status = 'Separando interlocutores';
+    renderCallAnalysisList();
+    item.speakerTranscript = await diarizeTranscriptSemantically(item.rawTranscript, state.abortController.signal);
+    item.status = 'Transcrita';
+    addHistory(item.speakerTranscript || item.rawTranscript, 'dictate', item.rawTranscript, {
+      source: 'call_analysis',
+      fileName: item.fileName,
+      filePath: item.filePath,
+    });
+    log(`[calls] Ligação "${item.fileName}" transcrita para análise.`);
+  } catch (err) {
+    item.status = 'Erro';
+    item.error = err.message;
+    log(`[error] Falha na análise da ligação ${item.fileName}: ${err.message}`);
+  } finally {
+    state.isProcessing = false;
+    state.abortController = null;
+    state.recordingExt = 'webm';
+    el.assistState.textContent = strings.waiting;
+    refreshControls();
+    renderCallAnalysisList();
+  }
+}
+
+async function diarizeTranscriptSemantically(transcript, signal) {
+  const prompt =
+    'Organize a transcrição abaixo como uma conversa entre interlocutores, inferindo pela semântica e alternância de fala quem é Pessoa A e Pessoa B.\n' +
+    'Use exatamente o formato "Pessoa A:" e "Pessoa B:".\n' +
+    'Se houver mais pessoas, use Pessoa C, Pessoa D.\n' +
+    'Não invente informação que não esteja na conversa.\n\n' +
+    `Transcrição bruta:\n${transcript}`;
+  return await llmComplete(prompt, signal);
+}
+
+async function runSelectedCallComparison() {
+  const item = selectedCallAnalysisItem();
+  if (!item) {
+    log('[calls] Selecione uma ligação para comparar.');
+    return;
+  }
+  item.expected = el.callExpectedPrompt.value.trim();
+  if (!item.expected) {
+    log('[calls] Descreva o que deveria ter acontecido antes de comparar.');
+    return;
+  }
+  if (!item.speakerTranscript && !item.rawTranscript) {
+    await transcribeCallAnalysisItem(item);
+  }
+  const transcript = item.speakerTranscript || item.rawTranscript;
+  if (!transcript) return;
+
+  const strings = UI_STRINGS[state.config.uiLanguage] || UI_STRINGS.pt;
+  state.isProcessing = true;
+  state.abortController = new AbortController();
+  item.status = 'Analisando';
+  el.assistState.textContent = strings.processing;
+  refreshControls();
+  renderCallAnalysisList();
+
+  try {
+    const prompt =
+      'Compare o que deveria ter acontecido em uma ligação com o que realmente aconteceu.\n' +
+      'Responda em português com seções objetivas:\n' +
+      'Resumo da ligação\n' +
+      'Pontos cumpridos\n' +
+      'Pontos faltantes\n' +
+      'Divergências relevantes\n' +
+      'Evidências da conversa\n' +
+      'Próximos passos recomendados\n' +
+      'Score de aderência de 0 a 100\n\n' +
+      `Esperado:\n${item.expected}\n\n` +
+      `Conversa transcrita:\n${transcript}`;
+    item.analysis = await llmComplete(prompt, state.abortController.signal);
+    item.status = 'Analisada';
+    el.callAnalysisOutput.textContent = item.analysis || 'Análise vazia.';
+    addHistory(`Análise de ${item.fileName}\n\n${item.analysis}`, 'chat', transcript, {
+      source: 'call_comparison',
+      fileName: item.fileName,
+      filePath: item.filePath,
+    });
+    log(`[calls] Comparação gerada para "${item.fileName}".`);
+  } catch (err) {
+    item.status = 'Erro';
+    item.error = err.message;
+    log(`[error] Falha ao comparar ligação: ${err.message}`);
+  } finally {
+    state.isProcessing = false;
+    state.abortController = null;
+    el.assistState.textContent = strings.waiting;
+    refreshControls();
+    renderCallAnalysisList();
+  }
+}
+
 function mimeToExt(mime) {
   if (!mime) return 'webm';
   if (mime.includes('mp4')) return 'mp4';
@@ -2444,11 +2745,14 @@ function setWorkspaceView(view) {
   el.dockGrid.classList.toggle('hidden', !isMain);
   el.fileTranscriptPanel.classList.toggle('hidden', view !== 'file-transcript');
   el.autoCallsPanel.classList.toggle('hidden', view !== 'auto-calls');
+  el.callAnalysisPanel.classList.toggle('hidden', view !== 'call-analysis');
   el.btnBackToMain.classList.toggle('hidden', isMain);
   el.btnFileTranscriptMode.classList.toggle('primary', view === 'file-transcript');
   el.btnAutoCallsMode.classList.toggle('primary', view === 'auto-calls');
+  el.btnCallAnalysisMode.classList.toggle('primary', view === 'call-analysis');
   el.btnFileTranscriptMode.classList.toggle('ghost', view !== 'file-transcript');
   el.btnAutoCallsMode.classList.toggle('ghost', view !== 'auto-calls');
+  el.btnCallAnalysisMode.classList.toggle('ghost', view !== 'call-analysis');
 }
 
 function refreshControls() {

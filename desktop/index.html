@@ -161,6 +161,7 @@
           <button id="btnTranslate" class="btn secondary"><span class="dot"></span>Traduzir <span class="kbd">F10</span></button>
           <button id="btnFileTranscriptMode" class="btn ghost">Transcrever gravação</button>
           <button id="btnAutoCallsMode" class="btn ghost">Automação de calls</button>
+          <button id="btnCallAnalysisMode" class="btn ghost">Análise de ligações</button>
           <button id="btnBackToMain" class="btn ghost hidden">Voltar ao painel principal</button>
           <span id="recordingTag" class="recording-tag hidden">Gravando</span>
         </div>
@@ -244,6 +245,53 @@
                 <input id="enableAutoImport" type="checkbox" />
                 Monitorar automaticamente (varredura a cada 30s)
               </label>
+            </div>
+          </div>
+
+          <div id="callAnalysisPanel" class="workflow-view hidden">
+            <div class="call-analysis-layout">
+              <aside class="call-analysis-list">
+                <div class="call-analysis-head">
+                  <strong>Ligações</strong>
+                  <span id="callAnalysisCount" class="muted">0 itens</span>
+                </div>
+                <div class="inline-actions">
+                  <button id="addCallAnalysisFileBtn" class="btn secondary small">Carregar áudio</button>
+                  <button id="addCallAnalysisFolderBtn" class="btn ghost small">Carregar pasta</button>
+                </div>
+                <div id="callAnalysisList" class="call-analysis-items"></div>
+              </aside>
+
+              <section class="call-analysis-workspace">
+                <div class="call-analysis-card">
+                  <div class="call-analysis-head">
+                    <strong>O que deveria acontecer</strong>
+                    <button id="runCallAnalysisBtn" class="btn secondary small">Comparar conversa</button>
+                  </div>
+                  <textarea id="callExpectedPrompt" class="call-expected-input" placeholder="Descreva objetivo, roteiro, pontos obrigatórios, perguntas esperadas e resultado ideal da ligação..."></textarea>
+                  <div class="inline-actions">
+                    <button id="transcribeSelectedCallBtn" class="btn ghost small">Transcrever selecionada</button>
+                    <button id="transcribeAllCallsBtn" class="btn ghost small">Transcrever todas</button>
+                  </div>
+                </div>
+
+                <div class="call-analysis-output-grid">
+                  <div class="call-analysis-card">
+                    <div class="call-analysis-head">
+                      <strong>Transcrição por interlocutor</strong>
+                      <span id="selectedCallStatus" class="muted">Nenhuma ligação selecionada</span>
+                    </div>
+                    <pre id="callTranscriptOutput" class="call-analysis-output">A transcrição aparecerá aqui.</pre>
+                  </div>
+                  <div class="call-analysis-card">
+                    <div class="call-analysis-head">
+                      <strong>Esperado vs realizado</strong>
+                      <button id="copyCallAnalysisBtn" class="btn ghost small">Copiar análise</button>
+                    </div>
+                    <pre id="callAnalysisOutput" class="call-analysis-output">A análise aparecerá aqui.</pre>
+                  </div>
+                </div>
+              </section>
             </div>
           </div>
         </section>
