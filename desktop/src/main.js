@@ -4,7 +4,7 @@ import { exists, mkdir, readDir, readFile, readTextFile, writeFile, writeTextFil
 
 const STORAGE_KEY = 'scribeflowai.desktop.config.v2';
 const LEGACY_STORAGE_KEYS = ['helpscribe.desktop.config.v2', 'helpscribe.desktop.config.v1'];
-const APP_VERSION = '0.1.34';
+const APP_VERSION = '0.1.35';
 const HISTORY_FILE_NAME = 'conversations.jsonl';
 const HISTORY_SUBDIR = 'Scribeflowai';
 const HISTORY_LIMIT = 200;
@@ -1623,6 +1623,7 @@ async function toggleRecord(mode) {
     return;
   }
 
+  setWorkspaceView('main');
   await startRecording(mode);
 }
 
@@ -1740,6 +1741,7 @@ async function handleRecordingStopped() {
     if (state.mode === 'codex') finalText = await codexPrompt(sourceText, state.abortController.signal);
 
     if (!state.abortController.signal.aborted) {
+      setWorkspaceView('main');
       el.resultText.value = finalText;
       updateMetrics();
       addHistory(finalText, state.mode, rawText, { combinedWithEditor: state.config.appendDictation && hadExistingText });
