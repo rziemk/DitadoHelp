@@ -5,7 +5,7 @@ import { exists, mkdir, readDir, readFile, readTextFile, writeFile, writeTextFil
 
 const STORAGE_KEY = 'scribeflowai.desktop.config.v2';
 const LEGACY_STORAGE_KEYS = ['helpscribe.desktop.config.v2', 'helpscribe.desktop.config.v1'];
-const APP_VERSION = '0.1.37';
+const APP_VERSION = '0.1.38';
 const HISTORY_FILE_NAME = 'conversations.jsonl';
 const HISTORY_SUBDIR = 'Scribeflowai';
 const HISTORY_LIMIT = 200;
@@ -1795,6 +1795,7 @@ async function pasteResultText(text) {
     log('[paste] Texto colado automaticamente.');
   } catch (err) {
     log(`[paste] Texto copiado, mas colagem automática falhou: ${err}`);
+    showNotice('Texto copiado. Para colar automaticamente, permita Acessibilidade para o Scribeflowai/Terminal nas Preferências do macOS.', 'error');
   }
 }
 
