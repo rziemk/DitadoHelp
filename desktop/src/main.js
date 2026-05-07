@@ -5,7 +5,7 @@ import { exists, mkdir, readDir, readFile, readTextFile, writeFile, writeTextFil
 
 const STORAGE_KEY = 'scribeflowai.desktop.config.v2';
 const LEGACY_STORAGE_KEYS = ['helpscribe.desktop.config.v2', 'helpscribe.desktop.config.v1'];
-const APP_VERSION = '0.1.41';
+const APP_VERSION = '0.1.42';
 const HISTORY_FILE_NAME = 'conversations.jsonl';
 const HISTORY_SUBDIR = 'Scribeflowai';
 const HISTORY_LIMIT = 200;
@@ -1673,21 +1673,13 @@ async function startRecording(mode) {
 
     state.stream = await navigator.mediaDevices.getUserMedia({ audio: true });
     state.chunks = [];
-    const preferredMimeTypes = [
-      'audio/webm;codecs=opus',
-      'audio/webm',
-      'audio/mp4',
-      'audio/mpeg',
-      'audio/ogg;codecs=opus',
-    ];
-    const selectedMime = preferredMimeTypes.find((t) => MediaRecorder.isTypeSupported?.(t)) || '';
-    const recorderOptions = selectedMime ? { mimeType: selectedMime } : undefined;
-    state.recordingMimeType = selectedMime || 'audio/webm';
+    const { mime, options } = selectSupportedAudioMime();
+    state.mediaRecorder = new MediaRecorder(state.stream, options);
+    state.recordingMimeType = state.mediaRecorder.mimeType || mime;
     state.recordingExt = mimeToExt(state.recordingMimeType);
-    state.mediaRecorder = new MediaRecorder(state.stream, recorderOptions);
     state.mediaRecorder.ondataavailable = (ev) => ev.data.size && state.chunks.push(ev.data);
     state.mediaRecorder.onstop = handleRecordingStopped;
-    state.mediaRecorder.start(250);
+    state.mediaRecorder.start();
     state.isRecording = true;
     state.isStartingRecording = false;
     hideNotice();
@@ -1718,13 +1710,6 @@ async function startRecording(mode) {
 
 async function stopRecording() {
   if (!state.isRecording || !state.mediaRecorder) return;
-  if (state.mediaRecorder.state === 'recording') {
-    try {
-      state.mediaRecorder.requestData();
-    } catch {
-      // Some implementations may throw if requestData is unsupported.
-    }
-  }
   state.mediaRecorder.stop();
   state.isRecording = false;
   refreshControls();
@@ -1739,7 +1724,7 @@ async function handleRecordingStopped() {
   refreshControls();
 
   try {
-    const blobType = state.recordingMimeType || state.chunks[0]?.type || 'audio/webm';
+    const blobType = state.recordingMimeType || state.mediaRecorder?.mimeType || state.chunks[0]?.type || '';
     const blob = new Blob(state.chunks, { type: blobType });
     log(`[rec] Captura finalizada: ${state.chunks.length} chunks, ${(blob.size / 1024).toFixed(1)} KB (${blobType}).`);
     if (!blob.size) throw new Error('Sem áudio capturado.');
@@ -1852,7 +1837,8 @@ async function transcribe(blob, signal) {
   if (!sttKey) throw new Error('Defina STT API Key.');
   const fd = new FormData();
   fd.append('model', state.config.sttModel || defaultConfig.sttModel);
-  const ext = uploadAudioExt(state.recordingExt || mimeToExt(blob.type || '') || 'webm');
+  const ext = uploadAudioExt(mimeToExt(blob.type || state.recordingMimeType || '') || state.recordingExt || 'mp4');
+  log(`[stt] Enviando audio.${ext} (${blob.type || 'sem mime'}, ${(blob.size / 1024).toFixed(1)} KB).`);
   fd.append('file', blob, `audio.${ext}`);
   fd.append('response_format', 'text');
   fd.append('language', 'pt');
@@ -1893,15 +1879,16 @@ async function transcribeAudioFileFromDisk() {
 
 function selectSupportedAudioMime() {
   const preferredMimeTypes = [
+    'audio/mp4;codecs=mp4a.40.2',
+    'audio/mp4',
     'audio/webm;codecs=opus',
     'audio/webm',
-    'audio/mp4',
     'audio/mpeg',
     'audio/ogg;codecs=opus',
   ];
   const selectedMime = preferredMimeTypes.find((t) => MediaRecorder.isTypeSupported?.(t)) || '';
   return {
-    mime: selectedMime || 'audio/webm',
+    mime: selectedMime,
     options: selectedMime ? { mimeType: selectedMime } : undefined,
   };
 }
@@ -1942,12 +1929,12 @@ async function startLocalCallRecording() {
     const { mime, options } = selectSupportedAudioMime();
     state.localCallStream = stream;
     state.localCallChunks = [];
-    state.localCallMimeType = mime;
-    state.localCallExt = mimeToExt(mime);
     state.localCallRecorder = new MediaRecorder(stream, options);
+    state.localCallMimeType = state.localCallRecorder.mimeType || mime;
+    state.localCallExt = mimeToExt(state.localCallMimeType);
     state.localCallRecorder.ondataavailable = (ev) => ev.data.size && state.localCallChunks.push(ev.data);
     state.localCallRecorder.onstop = handleLocalCallRecordingStopped;
-    state.localCallRecorder.start(500);
+    state.localCallRecorder.start();
     state.isLocalCallRecording = true;
 
     const [audioTrack] = stream.getAudioTracks();
@@ -2018,11 +2005,6 @@ async function stopLocalCallRecording() {
   if (!state.isLocalCallRecording || !state.localCallRecorder) return;
   try {
     if (state.localCallRecorder.state === 'recording') {
-      try {
-        state.localCallRecorder.requestData();
-      } catch {
-        // some webviews can throw for requestData
-      }
       state.localCallRecorder.stop();
     }
   } finally {
@@ -2040,7 +2022,7 @@ async function handleLocalCallRecordingStopped() {
   refreshControls();
 
   try {
-    const blobType = state.localCallMimeType || state.localCallChunks[0]?.type || 'audio/webm';
+    const blobType = state.localCallMimeType || state.localCallRecorder?.mimeType || state.localCallChunks[0]?.type || '';
     const blob = new Blob(state.localCallChunks, { type: blobType });
     if (!blob.size) throw new Error('Nenhum áudio capturado na gravação local da call.');
 
@@ -2052,10 +2034,7 @@ async function handleLocalCallRecordingStopped() {
     if (!rawText) throw new Error('Transcrição vazia para a gravação local.');
 
     const finalText = rawText.trim();
-    if (fromAutomation) {
-      el.resultText.value = finalText;
-      updateMetrics();
-    }
+    commitResultToEditor(finalText);
     addHistory(finalText, 'dictate', rawText, { source: 'local_call_recording', fileName, filePath });
     log(`[call] Gravação local transcrita com sucesso (${fileName}).`);
 
