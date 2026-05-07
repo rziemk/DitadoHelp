@@ -5,7 +5,7 @@ import { exists, mkdir, readDir, readFile, readTextFile, writeFile, writeTextFil
 
 const STORAGE_KEY = 'scribeflowai.desktop.config.v2';
 const LEGACY_STORAGE_KEYS = ['helpscribe.desktop.config.v2', 'helpscribe.desktop.config.v1'];
-const APP_VERSION = '0.1.39';
+const APP_VERSION = '0.1.40';
 const HISTORY_FILE_NAME = 'conversations.jsonl';
 const HISTORY_SUBDIR = 'Scribeflowai';
 const HISTORY_LIMIT = 200;
@@ -305,12 +305,23 @@ async function boot() {
   refreshControls();
   await refreshLocalAudioSources();
   restartAutoImportMonitor();
+  installTestHooks();
   log('[ui] Scribeflowai Desktop pronto.');
   if (!currentSttKey()) {
     showNotice('Configure a STT API Key em Configurações para iniciar a gravação.');
     el.configPopover.classList.remove('hidden');
     setConfigSectionsCollapsed();
   }
+}
+
+function installTestHooks() {
+  if (!new URLSearchParams(window.location.search).has('e2e')) return;
+  window.__scribeflowaiTest = {
+    commitResultToEditor,
+    resultText: () => el.resultText.value,
+    metricsText: () => el.metrics.textContent,
+    setWorkspaceView,
+  };
 }
 
 function hasCloudSyncPending() {
@@ -1750,8 +1761,7 @@ async function handleRecordingStopped() {
 
     if (!state.abortController.signal.aborted) {
       setWorkspaceView('main');
-      el.resultText.value = finalText;
-      updateMetrics();
+      commitResultToEditor(finalText);
       addHistory(finalText, state.mode, rawText, { combinedWithEditor: state.config.appendDictation && hadExistingText });
       await pasteResultText(finalText);
       log('[rec] Resultado pronto.');
@@ -1795,8 +1805,16 @@ async function pasteResultText(text) {
     log('[paste] Texto colado automaticamente.');
   } catch (err) {
     log(`[paste] Texto copiado, mas colagem automática falhou: ${err}`);
-    showNotice('Texto copiado. Para colar automaticamente, permita Acessibilidade para o Scribeflowai/Terminal nas Preferências do macOS.', 'error');
+    showNotice('Texto transcrito e copiado. Para colar automaticamente, libere Acessibilidade para o Scribeflowai nos Ajustes do macOS.', 'error');
   }
+}
+
+function commitResultToEditor(text) {
+  const finalText = (text || '').trim();
+  el.resultText.value = finalText;
+  el.resultText.dispatchEvent(new Event('input', { bubbles: true }));
+  updateMetrics();
+  log(`[ui] Texto escrito no box principal (${finalText.length} caracteres).`);
 }
 
 async function transcribe(blob, signal) {
