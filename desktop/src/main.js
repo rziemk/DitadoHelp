@@ -2024,7 +2024,7 @@ async function processAudioFilePath(filePath, fromAutomation = false) {
   const fileName = filePath.split('/').pop()?.split('\\').pop() || 'audio';
   const fileExt = fileName.includes('.') ? fileName.split('.').pop().toLowerCase() : 'mp3';
   el.selectedAudioFile.textContent = fileName;
-  el.audioSummaryOutput.textContent = 'Resumo da transcrição aparecerá aqui.';
+  el.audioSummaryOutput.textContent = 'Lendo arquivo de áudio...';
 
   const strings = UI_STRINGS[state.config.uiLanguage] || UI_STRINGS.pt;
   state.isProcessing = true;
@@ -2034,6 +2034,7 @@ async function processAudioFilePath(filePath, fromAutomation = false) {
 
   try {
     const bytes = await readFile(filePath);
+    el.audioSummaryOutput.textContent = 'Arquivo carregado. Enviando para transcrição...';
     const mimeTypeByExt = {
       mp3: 'audio/mpeg',
       wav: 'audio/wav',
@@ -2048,6 +2049,9 @@ async function processAudioFilePath(filePath, fromAutomation = false) {
     if (!rawText) throw new Error('Transcrição vazia para o arquivo selecionado.');
 
     const finalText = rawText.trim();
+    el.audioSummaryOutput.textContent = state.config.autoSummaryFromAudio
+      ? 'Transcrição pronta. Gerando resumo...'
+      : 'Transcrição pronta.';
     el.resultText.value = finalText;
     updateMetrics();
     addHistory(finalText, 'dictate', rawText, { source: fromAutomation ? 'auto_calls' : 'file_upload', fileName, filePath });
@@ -2066,8 +2070,11 @@ async function processAudioFilePath(filePath, fromAutomation = false) {
   } catch (err) {
     if (err?.name === 'AbortError') {
       log('[proc] Transcrição de arquivo cancelada.');
+      el.audioSummaryOutput.textContent = 'Transcrição cancelada.';
     } else {
       log(`[error] ${err.message}`);
+      el.audioSummaryOutput.textContent = `Erro: ${err.message}`;
+      showNotice(`Erro ao transcrever arquivo: ${err.message}`, 'error');
     }
   } finally {
     state.isProcessing = false;
