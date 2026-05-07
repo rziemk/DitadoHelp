@@ -32,8 +32,11 @@ fn paste_text(text: String) -> Result<(), String> {
     copy_to_clipboard(&text)?;
 
     let script = r#"tell application "System Events"
-  key code 48 using command down
-  delay 0.2
+  set frontApp to name of first application process whose frontmost is true
+  if frontApp is "Scribeflowai" or frontApp is "scribeflowai_desktop" then
+    key code 48 using command down
+    delay 0.2
+  end if
   key code 9 using command down
 end tell"#;
 
