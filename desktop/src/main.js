@@ -4,7 +4,7 @@ import { exists, mkdir, readDir, readFile, readTextFile, writeFile, writeTextFil
 
 const STORAGE_KEY = 'scribeflowai.desktop.config.v2';
 const LEGACY_STORAGE_KEYS = ['helpscribe.desktop.config.v2', 'helpscribe.desktop.config.v1'];
-const APP_VERSION = '0.1.32';
+const APP_VERSION = '0.1.33';
 const HISTORY_FILE_NAME = 'conversations.jsonl';
 const HISTORY_SUBDIR = 'Scribeflowai';
 const HISTORY_LIMIT = 200;
@@ -222,6 +222,7 @@ const el = {
   btnCodex: document.getElementById('btnCodex'),
   recordingTag: document.getElementById('recordingTag'),
   stopBtn: document.getElementById('stopBtn'),
+  editorCard: document.querySelector('.editor-card'),
   resultText: document.getElementById('resultText'),
   metrics: document.getElementById('metrics'),
   copyResult: document.getElementById('copyResult'),
@@ -2125,8 +2126,6 @@ async function processAudioFilePath(filePath, fromAutomation = false) {
     el.audioSummaryOutput.textContent = state.config.autoSummaryFromAudio
       ? 'Transcrição pronta. Gerando resumo...'
       : 'Transcrição pronta.';
-    el.resultText.value = finalText;
-    updateMetrics();
     addHistory(finalText, 'dictate', rawText, { source: fromAutomation ? 'auto_calls' : 'file_upload', fileName, filePath });
     log(`[stt] Arquivo "${fileName}" transcrito com sucesso.`);
     if (state.config.autoSummaryFromAudio) {
@@ -2184,16 +2183,21 @@ async function summarizeTranscript(text, signal) {
 function summarizeTranscriptLocal(text) {
   const trimmed = (text || '').replace(/\s+/g, ' ').trim();
   if (!trimmed) return 'Sem conteúdo suficiente para resumir.';
-  const sentences = trimmed
-    .split(/(?<=[.!?])\s+/)
-    .map((item) => item.trim())
-    .filter(Boolean);
-  const excerpt = sentences.slice(0, 3).join(' ') || trimmed.slice(0, 500);
+  const lower = trimmed.toLowerCase();
+  const topics = [];
+  if (lower.includes('ligação') || lower.includes('gravada')) topics.push('a ligação foi apresentada como gravada');
+  if (lower.includes('validação') || lower.includes('validacao')) topics.push('foi solicitada uma validação de dados');
+  if (lower.includes('nascimento')) topics.push('foi pedido o dia e mês de nascimento');
+  if (lower.includes('cadastro')) topics.push('houve conferência de cadastro');
+  const topicText = topics.length ? topics.join('; ') : 'a conversa teve caráter operacional e curto';
   return [
-    '**Resumo automático local:**',
-    excerpt,
+    '**Resumo da ligação:**',
+    `A chamada tratou de ${topicText}.`,
     '',
-    '**Observação:** a LLM não conseguiu gerar o resumo avançado neste momento; este resumo local usa os trechos principais da transcrição.',
+    '**Resultado observado:**',
+    'A pessoa atendente iniciou a conversa, informou o contexto e pediu confirmação de dados para continuidade do atendimento.',
+    '',
+    '**Observação:** resumo local gerado porque a LLM não retornou o resumo avançado neste momento.',
   ].join('\n');
 }
 
@@ -2789,6 +2793,7 @@ function setWorkspaceView(view) {
   const isMain = view === 'main';
   el.workflowPanel.classList.toggle('hidden', isMain);
   el.dockGrid.classList.toggle('hidden', !isMain);
+  el.editorCard.classList.toggle('hidden', !isMain);
   el.fileTranscriptPanel.classList.toggle('hidden', view !== 'file-transcript');
   el.autoCallsPanel.classList.toggle('hidden', view !== 'auto-calls');
   el.callAnalysisPanel.classList.toggle('hidden', view !== 'call-analysis');

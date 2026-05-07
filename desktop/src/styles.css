@@ -290,6 +290,9 @@ body {
   gap: 10px;
   overflow: auto;
 }
+.content-grid:has(.editor-card.hidden) {
+  grid-template-rows: minmax(440px, 1fr);
+}
 .editor-card {
   padding: 10px;
   min-height: 0;
