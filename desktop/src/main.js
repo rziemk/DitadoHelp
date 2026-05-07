@@ -5,7 +5,7 @@ import { exists, mkdir, readDir, readFile, readTextFile, writeFile, writeTextFil
 
 const STORAGE_KEY = 'scribeflowai.desktop.config.v2';
 const LEGACY_STORAGE_KEYS = ['helpscribe.desktop.config.v2', 'helpscribe.desktop.config.v1'];
-const APP_VERSION = '0.1.40';
+const APP_VERSION = '0.1.41';
 const HISTORY_FILE_NAME = 'conversations.jsonl';
 const HISTORY_SUBDIR = 'Scribeflowai';
 const HISTORY_LIMIT = 200;
@@ -318,6 +318,7 @@ function installTestHooks() {
   if (!new URLSearchParams(window.location.search).has('e2e')) return;
   window.__scribeflowaiTest = {
     commitResultToEditor,
+    ensureResultVisible,
     resultText: () => el.resultText.value,
     metricsText: () => el.metrics.textContent,
     setWorkspaceView,
@@ -1754,16 +1755,25 @@ async function handleRecordingStopped() {
     }
 
     let finalText = sourceText;
-    if (state.mode === 'rewrite') finalText = rewriteSmartLocal(sourceText);
-    if (state.mode === 'rewrite_llm') finalText = await rewriteText(sourceText, state.abortController.signal);
-    if (state.mode === 'translate') finalText = await translateText(sourceText, state.config.translationLang, state.abortController.signal);
-    if (state.mode === 'codex') finalText = await codexPrompt(sourceText, state.abortController.signal);
+    try {
+      if (state.mode === 'rewrite') finalText = rewriteSmartLocal(sourceText);
+      if (state.mode === 'rewrite_llm') finalText = await rewriteText(sourceText, state.abortController.signal);
+      if (state.mode === 'translate') finalText = await translateText(sourceText, state.config.translationLang, state.abortController.signal);
+      if (state.mode === 'codex') finalText = await codexPrompt(sourceText, state.abortController.signal);
+    } catch (err) {
+      finalText = sourceText;
+      showNotice(`Transcrição feita, mas o processamento ${modeLabel(state.mode)} falhou. Mantive o texto bruto no box.`, 'error');
+      log(`[proc] Falha no processamento ${state.mode}; usando transcrição bruta: ${err.message}`);
+    }
+
+    finalText = ensureFinalText(finalText, sourceText);
 
     if (!state.abortController.signal.aborted) {
       setWorkspaceView('main');
       commitResultToEditor(finalText);
       addHistory(finalText, state.mode, rawText, { combinedWithEditor: state.config.appendDictation && hadExistingText });
       await pasteResultText(finalText);
+      ensureResultVisible(finalText);
       log('[rec] Resultado pronto.');
     }
   } catch (err) {
@@ -1771,6 +1781,7 @@ async function handleRecordingStopped() {
       log('[proc] Processamento cancelado.');
     } else {
       log(`[error] ${err.message}`);
+      showNotice(`Falha ao transcrever: ${err.message}`, 'error');
     }
   } finally {
     state.isProcessing = false;
@@ -1815,6 +1826,25 @@ function commitResultToEditor(text) {
   el.resultText.dispatchEvent(new Event('input', { bubbles: true }));
   updateMetrics();
   log(`[ui] Texto escrito no box principal (${finalText.length} caracteres).`);
+}
+
+function ensureFinalText(finalText, sourceText) {
+  const processed = (finalText || '').trim();
+  if (processed) return processed;
+  const fallback = (sourceText || '').trim();
+  if (fallback) {
+    log('[proc] Processamento retornou vazio; usando transcrição bruta no box.');
+    return fallback;
+  }
+  return '';
+}
+
+function ensureResultVisible(expectedText) {
+  const expected = (expectedText || '').trim();
+  if (!expected) return;
+  if ((el.resultText.value || '').trim() === expected) return;
+  log('[ui] Box principal perdeu o texto após a colagem; restaurando resultado.');
+  commitResultToEditor(expected);
 }
 
 async function transcribe(blob, signal) {
