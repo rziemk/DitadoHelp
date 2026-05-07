@@ -159,6 +159,9 @@
           <button id="btnRewriteLlm" class="btn secondary"><span class="dot"></span>Reescrever com LLM <span class="kbd">F12</span></button>
           <button id="btnCodex" class="btn secondary"><span class="dot"></span>Escreve Prompt <span class="kbd">F11</span></button>
           <button id="btnTranslate" class="btn secondary"><span class="dot"></span>Traduzir <span class="kbd">F10</span></button>
+          <button id="btnFileTranscriptMode" class="btn ghost">Transcrever gravação</button>
+          <button id="btnAutoCallsMode" class="btn ghost">Automação de calls</button>
+          <button id="btnBackToMain" class="btn ghost hidden">Voltar ao painel principal</button>
           <span id="recordingTag" class="recording-tag hidden">Gravando</span>
         </div>
 
@@ -196,6 +199,52 @@
             <button id="stopBtn" class="btn danger">Parar +/- Enter</button>
             <button id="copyResult" class="btn ghost">Copiar resultado</button>
             <button id="copyStatus" class="btn ghost">Copiar status</button>
+          </div>
+        </section>
+
+        <section id="workflowPanel" class="card workflow-panel hidden">
+          <div id="fileTranscriptPanel" class="workflow-view">
+            <div class="file-transcript-panel">
+              <div class="file-transcript-title">Carregar gravação para transcrição</div>
+              <div class="file-transcript-hint">Suporta MP3, WAV, M4A, MP4, OGG e WEBM.</div>
+              <div class="inline-actions">
+                <button id="loadAudioFileBtn" class="btn secondary">Carregar áudio e transcrever</button>
+              </div>
+              <label class="editor-toggle file-transcript-toggle">
+                <input id="autoSummaryFromAudio" type="checkbox" />
+                Gerar resumo automático após transcrever
+              </label>
+              <div id="selectedAudioFile" class="file-transcript-selected">Nenhum arquivo selecionado.</div>
+              <pre id="audioSummaryOutput" class="audio-summary-output">Resumo da transcrição aparecerá aqui.</pre>
+            </div>
+          </div>
+
+          <div id="autoCallsPanel" class="workflow-view hidden">
+            <div class="file-transcript-panel">
+              <div class="file-transcript-title">Gravação local da call (ao vivo)</div>
+              <div class="file-transcript-hint">Grave uma fonte de áudio local e transcreva automaticamente ao parar.</div>
+              <div class="call-recorder-source">
+                <select id="localCallAudioSource" class="field compact"></select>
+                <button id="refreshLocalAudioSourcesBtn" class="btn ghost">Atualizar fontes</button>
+              </div>
+              <div class="inline-actions">
+                <button id="startLocalCallRecordingBtn" class="btn secondary">Iniciar gravação local</button>
+                <button id="stopLocalCallRecordingBtn" class="btn danger" disabled>Parar e transcrever</button>
+              </div>
+              <div id="localCallRecordingStatus" class="file-transcript-selected">Pronto para gravar localmente.</div>
+              <hr />
+              <div class="file-transcript-title">Monitorar gravações de chamadas</div>
+              <div class="file-transcript-hint">Selecione uma pasta onde Zoom/Meet/Teams salva os áudios ou vídeos da reunião.</div>
+              <div class="inline-actions">
+                <button id="chooseAutoImportDirBtn" class="btn secondary">Escolher pasta</button>
+                <button id="scanAutoImportNowBtn" class="btn ghost">Processar novos agora</button>
+              </div>
+              <div id="autoImportDirLabel" class="file-transcript-selected">Nenhuma pasta configurada.</div>
+              <label class="editor-toggle file-transcript-toggle">
+                <input id="enableAutoImport" type="checkbox" />
+                Monitorar automaticamente (varredura a cada 30s)
+              </label>
+            </div>
           </div>
         </section>
 

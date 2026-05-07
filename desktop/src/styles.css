@@ -340,6 +340,17 @@ body {
 .editor-actions .btn { height: 40px; }
 .editor-actions .btn.danger { margin-right: auto; }
 
+.workflow-panel {
+  min-height: 0;
+  padding: 10px;
+}
+.workflow-view {
+  height: 100%;
+}
+.workflow-view.hidden {
+  display: none;
+}
+
 .dock-grid {
   min-height: 0;
   height: 100%;
@@ -401,6 +412,55 @@ body {
   font-size: 13px;
   white-space: pre-wrap;
   min-height: 0;
+}
+.file-transcript-panel {
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 12px;
+  background: #fff;
+  display: grid;
+  gap: 10px;
+  align-content: start;
+  min-height: 100%;
+}
+.file-transcript-title {
+  font-size: 15px;
+  font-weight: 700;
+  color: #1e293b;
+}
+.file-transcript-hint,
+.file-transcript-selected {
+  font-size: 13px;
+  color: #64748b;
+}
+.file-transcript-panel hr {
+  width: 100%;
+  border: 0;
+  border-top: 1px solid var(--border);
+  margin: 2px 0;
+}
+.call-recorder-source {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  flex-wrap: wrap;
+}
+.call-recorder-source select {
+  min-width: min(420px, 100%);
+}
+.file-transcript-toggle {
+  margin-top: -2px;
+}
+.audio-summary-output {
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 10px;
+  margin: 0;
+  background: #fff;
+  overflow: auto;
+  font-size: 13px;
+  white-space: pre-wrap;
+  min-height: 76px;
 }
 
 .chat-card {

@@ -1,10 +1,10 @@
 import { documentDir, join } from '@tauri-apps/api/path';
 import { open as openDialog, save as saveDialog } from '@tauri-apps/plugin-dialog';
-import { exists, mkdir, readTextFile, writeTextFile } from '@tauri-apps/plugin-fs';
+import { exists, mkdir, readDir, readFile, readTextFile, writeFile, writeTextFile } from '@tauri-apps/plugin-fs';
 
 const STORAGE_KEY = 'scribeflowai.desktop.config.v2';
 const LEGACY_STORAGE_KEYS = ['helpscribe.desktop.config.v2', 'helpscribe.desktop.config.v1'];
-const APP_VERSION = '0.1.29';
+const APP_VERSION = '0.1.31';
 const HISTORY_FILE_NAME = 'conversations.jsonl';
 const HISTORY_SUBDIR = 'Scribeflowai';
 const HISTORY_LIMIT = 200;
@@ -31,6 +31,10 @@ const defaultConfig = {
   sessionExpiresAt: '',
   deviceId: '',
   uiLanguage: 'pt',
+  autoSummaryFromAudio: true,
+  autoImportCallsEnabled: false,
+  autoImportCallsDir: '',
+  autoImportCallsSeen: [],
 };
 
 const MODEL_OPTION_CUSTOM = '__custom__';
@@ -143,6 +147,14 @@ const state = {
   authPollTimer: null,
   authRequestId: '',
   hasPendingCloudSync: false,
+  autoImportTimer: null,
+  autoImportSeen: new Set(),
+  localCallRecorder: null,
+  localCallStream: null,
+  localCallChunks: [],
+  localCallMimeType: '',
+  localCallExt: 'webm',
+  isLocalCallRecording: false,
 };
 
 const el = {
@@ -201,6 +213,9 @@ const el = {
   btnRewrite: document.getElementById('btnRewrite'),
   btnRewriteLlm: document.getElementById('btnRewriteLlm'),
   btnTranslate: document.getElementById('btnTranslate'),
+  btnFileTranscriptMode: document.getElementById('btnFileTranscriptMode'),
+  btnAutoCallsMode: document.getElementById('btnAutoCallsMode'),
+  btnBackToMain: document.getElementById('btnBackToMain'),
   btnCodex: document.getElementById('btnCodex'),
   recordingTag: document.getElementById('recordingTag'),
   stopBtn: document.getElementById('stopBtn'),
@@ -214,6 +229,23 @@ const el = {
   tabs: Array.from(document.querySelectorAll('.tab')),
   historyTab: document.getElementById('historyTab'),
   statusTab: document.getElementById('statusTab'),
+  workflowPanel: document.getElementById('workflowPanel'),
+  fileTranscriptPanel: document.getElementById('fileTranscriptPanel'),
+  autoCallsPanel: document.getElementById('autoCallsPanel'),
+  dockGrid: document.querySelector('.dock-grid'),
+  loadAudioFileBtn: document.getElementById('loadAudioFileBtn'),
+  selectedAudioFile: document.getElementById('selectedAudioFile'),
+  autoSummaryFromAudio: document.getElementById('autoSummaryFromAudio'),
+  audioSummaryOutput: document.getElementById('audioSummaryOutput'),
+  chooseAutoImportDirBtn: document.getElementById('chooseAutoImportDirBtn'),
+  scanAutoImportNowBtn: document.getElementById('scanAutoImportNowBtn'),
+  autoImportDirLabel: document.getElementById('autoImportDirLabel'),
+  enableAutoImport: document.getElementById('enableAutoImport'),
+  localCallAudioSource: document.getElementById('localCallAudioSource'),
+  refreshLocalAudioSourcesBtn: document.getElementById('refreshLocalAudioSourcesBtn'),
+  startLocalCallRecordingBtn: document.getElementById('startLocalCallRecordingBtn'),
+  stopLocalCallRecordingBtn: document.getElementById('stopLocalCallRecordingBtn'),
+  localCallRecordingStatus: document.getElementById('localCallRecordingStatus'),
   historyList: document.getElementById('historyList'),
   historyUse: document.getElementById('historyUse'),
   historyCopy: document.getElementById('historyCopy'),
@@ -247,7 +279,10 @@ async function boot() {
   renderHistory();
   updateMetrics();
   setActiveMode('dictate');
+  setWorkspaceView('main');
   refreshControls();
+  await refreshLocalAudioSources();
+  restartAutoImportMonitor();
   log('[ui] Scribeflowai Desktop pronto.');
   if (!currentSttKey()) {
     showNotice('Configure a STT API Key em Configurações para iniciar a gravação.');
@@ -413,6 +448,9 @@ function wireEvents() {
   el.btnRewriteLlm.addEventListener('click', () => toggleRecord('rewrite_llm'));
   el.btnTranslate.addEventListener('click', () => toggleRecord('translate'));
   el.btnCodex.addEventListener('click', () => toggleRecord('codex'));
+  el.btnFileTranscriptMode.addEventListener('click', () => setWorkspaceView('file-transcript'));
+  el.btnAutoCallsMode.addEventListener('click', () => setWorkspaceView('auto-calls'));
+  el.btnBackToMain.addEventListener('click', () => setWorkspaceView('main'));
   el.stopBtn.addEventListener('click', handleStop);
 
   el.copyResult.addEventListener('click', async () => {
@@ -541,12 +579,57 @@ function wireEvents() {
 
   el.tabs.forEach((btn) => {
     btn.addEventListener('click', () => {
-      el.tabs.forEach((b) => b.classList.remove('active'));
-      btn.classList.add('active');
-      const tab = btn.dataset.tab;
-      el.historyTab.classList.toggle('active', tab === 'history');
-      el.statusTab.classList.toggle('active', tab === 'status');
+      const tabName = btn.dataset.tab || 'history';
+      el.tabs.forEach((b) => b.classList.toggle('active', b.dataset.tab === tabName));
+      el.historyTab.classList.toggle('active', tabName === 'history');
+      el.statusTab.classList.toggle('active', tabName === 'status');
     });
+  });
+
+  el.loadAudioFileBtn.addEventListener('click', async () => {
+    await withButtonLoading(el.loadAudioFileBtn, 'Transcrevendo...', async () => {
+      await transcribeAudioFileFromDisk();
+    });
+  });
+
+  el.chooseAutoImportDirBtn.addEventListener('click', async () => {
+    await withButtonLoading(el.chooseAutoImportDirBtn, 'Abrindo...', async () => {
+      const selected = await openDialog({ multiple: false, directory: true });
+      if (!selected || typeof selected !== 'string') return;
+      state.config.autoImportCallsDir = selected;
+      el.autoImportDirLabel.textContent = selected;
+      persistConfig();
+      log(`[auto] Pasta monitorada definida: ${selected}`);
+      if (state.config.autoImportCallsEnabled) {
+        restartAutoImportMonitor();
+      }
+    });
+  });
+
+  el.scanAutoImportNowBtn.addEventListener('click', async () => {
+    await withButtonLoading(el.scanAutoImportNowBtn, 'Processando...', async () => {
+      await scanAutoImportDirectory();
+    });
+  });
+
+  el.refreshLocalAudioSourcesBtn.addEventListener('click', async () => {
+    await withButtonLoading(el.refreshLocalAudioSourcesBtn, 'Atualizando...', async () => {
+      await refreshLocalAudioSources(true);
+    });
+  });
+
+  el.startLocalCallRecordingBtn.addEventListener('click', async () => {
+    await startLocalCallRecording();
+  });
+
+  el.stopLocalCallRecordingBtn.addEventListener('click', async () => {
+    await stopLocalCallRecording();
+  });
+
+  el.enableAutoImport.addEventListener('change', () => {
+    state.config.autoImportCallsEnabled = el.enableAutoImport.checked;
+    persistConfig();
+    restartAutoImportMonitor();
   });
 
   el.historyUse.addEventListener('click', () => {
@@ -609,6 +692,11 @@ function syncConfigToUI() {
   el.authPhone.value = state.config.authPhone || '';
   el.authLanguage.value = state.config.authLanguage || 'pt';
   el.uiLanguage.value = state.config.uiLanguage;
+  el.autoSummaryFromAudio.checked = Boolean(state.config.autoSummaryFromAudio);
+  el.audioSummaryOutput.textContent = 'Resumo da transcrição aparecerá aqui.';
+  el.autoImportDirLabel.textContent = state.config.autoImportCallsDir || 'Nenhuma pasta configurada.';
+  el.enableAutoImport.checked = Boolean(state.config.autoImportCallsEnabled);
+  state.autoImportSeen = new Set(Array.isArray(state.config.autoImportCallsSeen) ? state.config.autoImportCallsSeen : []);
   refreshAuthUI();
 }
 
@@ -706,6 +794,10 @@ function saveFromUI() {
     sessionExpiresAt: state.config.sessionExpiresAt || '',
     deviceId: state.config.deviceId || '',
     uiLanguage: el.uiLanguage.value,
+    autoSummaryFromAudio: el.autoSummaryFromAudio.checked,
+    autoImportCallsEnabled: el.enableAutoImport.checked,
+    autoImportCallsDir: state.config.autoImportCallsDir || '',
+    autoImportCallsSeen: Array.from(state.autoImportSeen).slice(-500),
   };
 
   persistConfig();
@@ -1637,6 +1729,368 @@ async function transcribe(blob, signal) {
   return (await resp.text()).trim();
 }
 
+async function transcribeAudioFileFromDisk() {
+  if (state.isRecording || state.isProcessing || state.isStartingRecording) {
+    log('[stt] Aguarde o processamento atual finalizar para importar áudio.');
+    return;
+  }
+
+  const selected = await openDialog({
+    multiple: false,
+    directory: false,
+    filters: [{ name: 'Audio', extensions: ['mp3', 'wav', 'm4a', 'mp4', 'ogg', 'webm'] }],
+  });
+  if (!selected || typeof selected !== 'string') return;
+  await processAudioFilePath(selected, false);
+}
+
+function selectSupportedAudioMime() {
+  const preferredMimeTypes = [
+    'audio/webm;codecs=opus',
+    'audio/webm',
+    'audio/mp4',
+    'audio/mpeg',
+    'audio/ogg;codecs=opus',
+  ];
+  const selectedMime = preferredMimeTypes.find((t) => MediaRecorder.isTypeSupported?.(t)) || '';
+  return {
+    mime: selectedMime || 'audio/webm',
+    options: selectedMime ? { mimeType: selectedMime } : undefined,
+  };
+}
+
+async function startLocalCallRecording() {
+  if (state.isLocalCallRecording) {
+    log('[call] A gravação local já está ativa.');
+    return;
+  }
+  if (state.isRecording || state.isProcessing || state.isStartingRecording) {
+    log('[call] Aguarde finalizar a operação atual antes de iniciar gravação local.');
+    return;
+  }
+  if (!currentSttKey()) {
+    showNotice('Configure a STT API Key em Configurações para gravar/transcrever calls.', 'error');
+    log('[error] Configure STT API Key antes de gravar call local.');
+    el.configPopover.classList.remove('hidden');
+    el.sttKey.focus();
+    return;
+  }
+  if (!navigator.mediaDevices?.getUserMedia) {
+    log('[error] Este ambiente não suporta captura de áudio local (getUserMedia).');
+    return;
+  }
+
+  try {
+    await refreshLocalAudioSources();
+    const selectedDeviceId = el.localCallAudioSource.value || '';
+    const audioConstraint = selectedDeviceId
+      ? { deviceId: { exact: selectedDeviceId }, echoCancellation: false, noiseSuppression: false, autoGainControl: false }
+      : { echoCancellation: false, noiseSuppression: false, autoGainControl: false };
+    const stream = await navigator.mediaDevices.getUserMedia({ audio: audioConstraint });
+    if (!stream.getAudioTracks().length) {
+      stream.getTracks().forEach((track) => track.stop());
+      throw new Error('Nenhuma fonte de áudio local foi capturada.');
+    }
+
+    const { mime, options } = selectSupportedAudioMime();
+    state.localCallStream = stream;
+    state.localCallChunks = [];
+    state.localCallMimeType = mime;
+    state.localCallExt = mimeToExt(mime);
+    state.localCallRecorder = new MediaRecorder(stream, options);
+    state.localCallRecorder.ondataavailable = (ev) => ev.data.size && state.localCallChunks.push(ev.data);
+    state.localCallRecorder.onstop = handleLocalCallRecordingStopped;
+    state.localCallRecorder.start(500);
+    state.isLocalCallRecording = true;
+
+    const [audioTrack] = stream.getAudioTracks();
+    if (audioTrack) {
+      audioTrack.onended = () => {
+        if (state.isLocalCallRecording) {
+          void stopLocalCallRecording();
+        }
+      };
+    }
+
+    el.localCallRecordingStatus.textContent = 'Gravação local ativa. Clique em "Parar e transcrever" ao fim da call.';
+    refreshControls();
+    log(`[call] Gravação local iniciada usando fonte: ${selectedLocalAudioSourceLabel()}.`);
+  } catch (err) {
+    const denied = err?.name === 'NotAllowedError' || err?.name === 'SecurityError';
+    if (denied) {
+      log('[error] Permissão negada para captura de áudio. Autorize o microfone/entrada de áudio para o app.');
+      return;
+    }
+    log(`[error] Falha ao iniciar gravação local: ${err.message}`);
+  }
+}
+
+async function refreshLocalAudioSources(forcePermission = false) {
+  if (!navigator.mediaDevices?.enumerateDevices) {
+    el.localCallAudioSource.innerHTML = '<option value="">Fonte padrão do sistema</option>';
+    return;
+  }
+
+  if (forcePermission && navigator.mediaDevices?.getUserMedia) {
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      stream.getTracks().forEach((track) => track.stop());
+    } catch {
+      // enumerateDevices still works, but labels may remain hidden without permission.
+    }
+  }
+
+  const previous = el.localCallAudioSource.value;
+  const devices = await navigator.mediaDevices.enumerateDevices();
+  const audioInputs = devices.filter((device) => device.kind === 'audioinput');
+  el.localCallAudioSource.innerHTML = '';
+
+  const defaultOption = document.createElement('option');
+  defaultOption.value = '';
+  defaultOption.textContent = 'Fonte padrão do sistema';
+  el.localCallAudioSource.appendChild(defaultOption);
+
+  audioInputs.forEach((device, index) => {
+    const option = document.createElement('option');
+    option.value = device.deviceId;
+    option.textContent = device.label || `Entrada de áudio ${index + 1}`;
+    el.localCallAudioSource.appendChild(option);
+  });
+
+  if (previous && audioInputs.some((device) => device.deviceId === previous)) {
+    el.localCallAudioSource.value = previous;
+  }
+}
+
+function selectedLocalAudioSourceLabel() {
+  const option = el.localCallAudioSource.selectedOptions?.[0];
+  return option?.textContent || 'Fonte padrão do sistema';
+}
+
+async function stopLocalCallRecording() {
+  if (!state.isLocalCallRecording || !state.localCallRecorder) return;
+  try {
+    if (state.localCallRecorder.state === 'recording') {
+      try {
+        state.localCallRecorder.requestData();
+      } catch {
+        // some webviews can throw for requestData
+      }
+      state.localCallRecorder.stop();
+    }
+  } finally {
+    state.isLocalCallRecording = false;
+    el.localCallRecordingStatus.textContent = 'Finalizando gravação local e iniciando transcrição...';
+    refreshControls();
+  }
+}
+
+async function handleLocalCallRecordingStopped() {
+  const strings = UI_STRINGS[state.config.uiLanguage] || UI_STRINGS.pt;
+  state.isProcessing = true;
+  state.abortController = new AbortController();
+  el.assistState.textContent = strings.processing;
+  refreshControls();
+
+  try {
+    const blobType = state.localCallMimeType || state.localCallChunks[0]?.type || 'audio/webm';
+    const blob = new Blob(state.localCallChunks, { type: blobType });
+    if (!blob.size) throw new Error('Nenhum áudio capturado na gravação local da call.');
+
+    const filePath = await persistLocalCallRecording(blob, state.localCallExt || mimeToExt(blobType));
+    const fileName = filePath
+      ? filePath.split('/').pop()?.split('\\').pop() || 'call-audio'
+      : `call-audio.${state.localCallExt || mimeToExt(blobType)}`;
+    const rawText = await transcribe(blob, state.abortController.signal);
+    if (!rawText) throw new Error('Transcrição vazia para a gravação local.');
+
+    const finalText = rawText.trim();
+    el.resultText.value = finalText;
+    updateMetrics();
+    addHistory(finalText, 'dictate', rawText, { source: 'local_call_recording', fileName, filePath });
+    log(`[call] Gravação local transcrita com sucesso (${fileName}).`);
+
+    if (state.config.autoSummaryFromAudio) {
+      const summary = await summarizeTranscript(finalText, state.abortController.signal);
+      if (summary) {
+        el.audioSummaryOutput.textContent = summary;
+        el.chatAnswer.textContent = summary;
+        addHistory(`Resumo de ${fileName}\n\n${summary}`, 'chat', finalText, { source: 'audio_summary', fileName, filePath });
+        log('[llm] Resumo automático da call gerado.');
+      }
+    }
+    el.localCallRecordingStatus.textContent = filePath
+      ? `Gravação finalizada e salva em: ${filePath}`
+      : 'Gravação finalizada e transcrita (sem arquivo local no modo navegador).';
+  } catch (err) {
+    if (err?.name === 'AbortError') {
+      log('[proc] Transcrição da call cancelada.');
+    } else {
+      log(`[error] ${err.message}`);
+    }
+    el.localCallRecordingStatus.textContent = 'Falha ao processar gravação local. Veja o Status Log.';
+  } finally {
+    if (state.localCallStream) {
+      state.localCallStream.getTracks().forEach((track) => track.stop());
+      state.localCallStream = null;
+    }
+    state.localCallRecorder = null;
+    state.localCallChunks = [];
+    state.localCallMimeType = '';
+    state.localCallExt = 'webm';
+    state.isLocalCallRecording = false;
+    state.isProcessing = false;
+    state.abortController = null;
+    el.assistState.textContent = strings.waiting;
+    refreshControls();
+  }
+}
+
+async function persistLocalCallRecording(blob, ext) {
+  if (!isTauriRuntime) return '';
+  const defaultBaseDir = await join(await documentDir(), HISTORY_SUBDIR);
+  const baseDir = state.config.autoImportCallsDir?.trim() || state.historyDirResolved || state.config.historyDir || defaultBaseDir;
+  const recordingsDir = await join(baseDir, 'call-recordings');
+  await mkdir(recordingsDir, { recursive: true });
+
+  const stamp = new Date().toISOString().replace(/[:.]/g, '-');
+  const safeExt = (ext || 'webm').replace(/[^a-z0-9]/gi, '').toLowerCase() || 'webm';
+  const filePath = await join(recordingsDir, `call-${stamp}.${safeExt}`);
+  const bytes = new Uint8Array(await blob.arrayBuffer());
+  await writeFile(filePath, bytes);
+  return filePath;
+}
+
+function isSupportedAudioFile(filePath = '') {
+  return /\.(mp3|wav|m4a|mp4|ogg|webm)$/i.test(filePath);
+}
+
+function restartAutoImportMonitor() {
+  if (state.autoImportTimer) {
+    clearInterval(state.autoImportTimer);
+    state.autoImportTimer = null;
+  }
+  if (!state.config.autoImportCallsEnabled) {
+    log('[auto] Monitoramento automático desativado.');
+    return;
+  }
+  if (!state.config.autoImportCallsDir) {
+    log('[auto] Defina uma pasta para ativar o monitoramento automático.');
+    return;
+  }
+  state.autoImportTimer = setInterval(() => {
+    void scanAutoImportDirectory();
+  }, 30000);
+  log('[auto] Monitoramento automático ativado (30s).');
+  void scanAutoImportDirectory();
+}
+
+async function scanAutoImportDirectory() {
+  if (!state.config.autoImportCallsDir) {
+    log('[auto] Nenhuma pasta configurada para automação.');
+    return;
+  }
+  if (state.isRecording || state.isProcessing || state.isStartingRecording) {
+    return;
+  }
+  try {
+    const entries = await readDir(state.config.autoImportCallsDir);
+    const files = entries
+      .filter((entry) => entry?.isFile && typeof entry?.name === 'string')
+      .map((entry) => entry.path)
+      .filter((path) => isSupportedAudioFile(path))
+      .filter((path) => !state.autoImportSeen.has(path));
+
+    if (!files.length) return;
+    log(`[auto] ${files.length} novo(s) arquivo(s) detectado(s) para transcrever.`);
+    for (const filePath of files) {
+      if (state.isRecording || state.isProcessing || state.isStartingRecording) break;
+      await processAudioFilePath(filePath, true);
+    }
+    persistConfig();
+  } catch (err) {
+    log(`[error] Falha ao varrer pasta monitorada: ${err.message}`);
+  }
+}
+
+async function processAudioFilePath(filePath, fromAutomation = false) {
+  const sttKey = currentSttKey();
+  if (!sttKey) {
+    showNotice('Configure a STT API Key em Configurações para transcrever arquivo.');
+    log('[error] Configure STT API Key para transcrever arquivo.');
+    return;
+  }
+
+  const fileName = filePath.split('/').pop()?.split('\\').pop() || 'audio';
+  const fileExt = fileName.includes('.') ? fileName.split('.').pop().toLowerCase() : 'mp3';
+  el.selectedAudioFile.textContent = fileName;
+  el.audioSummaryOutput.textContent = 'Resumo da transcrição aparecerá aqui.';
+
+  const strings = UI_STRINGS[state.config.uiLanguage] || UI_STRINGS.pt;
+  state.isProcessing = true;
+  state.abortController = new AbortController();
+  el.assistState.textContent = strings.processing;
+  refreshControls();
+
+  try {
+    const bytes = await readFile(filePath);
+    const mimeTypeByExt = {
+      mp3: 'audio/mpeg',
+      wav: 'audio/wav',
+      m4a: 'audio/mp4',
+      mp4: 'audio/mp4',
+      ogg: 'audio/ogg',
+      webm: 'audio/webm',
+    };
+    const blob = new Blob([bytes], { type: mimeTypeByExt[fileExt] || 'audio/mpeg' });
+    state.recordingExt = fileExt;
+    const rawText = await transcribe(blob, state.abortController.signal);
+    if (!rawText) throw new Error('Transcrição vazia para o arquivo selecionado.');
+
+    const finalText = rawText.trim();
+    el.resultText.value = finalText;
+    updateMetrics();
+    addHistory(finalText, 'dictate', rawText, { source: fromAutomation ? 'auto_calls' : 'file_upload', fileName, filePath });
+    log(`[stt] Arquivo "${fileName}" transcrito com sucesso.`);
+    if (state.config.autoSummaryFromAudio) {
+      const summary = await summarizeTranscript(finalText, state.abortController.signal);
+      if (summary) {
+        el.audioSummaryOutput.textContent = summary;
+        el.chatAnswer.textContent = summary;
+        addHistory(`Resumo de ${fileName}\n\n${summary}`, 'chat', finalText, { source: 'audio_summary', fileName, filePath });
+        log('[llm] Resumo automático da transcrição gerado.');
+      }
+    }
+    state.autoImportSeen.add(filePath);
+    setWorkspaceView('main');
+  } catch (err) {
+    if (err?.name === 'AbortError') {
+      log('[proc] Transcrição de arquivo cancelada.');
+    } else {
+      log(`[error] ${err.message}`);
+    }
+  } finally {
+    state.isProcessing = false;
+    state.abortController = null;
+    state.recordingExt = 'webm';
+    el.assistState.textContent = strings.waiting;
+    refreshControls();
+  }
+}
+
+async function summarizeTranscript(text, signal) {
+  const trimmed = (text || '').trim();
+  if (!trimmed) return '';
+  const prompt =
+    'Resuma a transcrição em português, de forma objetiva, com:\n' +
+    '1) contexto geral\n' +
+    '2) pontos principais\n' +
+    '3) decisões tomadas\n' +
+    '4) próximos passos acionáveis.\n\n' +
+    `Transcrição:\n${trimmed}`;
+  return await llmComplete(prompt, signal);
+}
+
 function mimeToExt(mime) {
   if (!mime) return 'webm';
   if (mime.includes('mp4')) return 'mp4';
@@ -1977,8 +2431,21 @@ function setActiveMode(mode) {
   });
 }
 
+function setWorkspaceView(view) {
+  const isMain = view === 'main';
+  el.workflowPanel.classList.toggle('hidden', isMain);
+  el.dockGrid.classList.toggle('hidden', !isMain);
+  el.fileTranscriptPanel.classList.toggle('hidden', view !== 'file-transcript');
+  el.autoCallsPanel.classList.toggle('hidden', view !== 'auto-calls');
+  el.btnBackToMain.classList.toggle('hidden', isMain);
+  el.btnFileTranscriptMode.classList.toggle('primary', view === 'file-transcript');
+  el.btnAutoCallsMode.classList.toggle('primary', view === 'auto-calls');
+  el.btnFileTranscriptMode.classList.toggle('ghost', view !== 'file-transcript');
+  el.btnAutoCallsMode.classList.toggle('ghost', view !== 'auto-calls');
+}
+
 function refreshControls() {
-  const busy = state.isRecording || state.isProcessing || state.isStartingRecording;
+  const busy = state.isRecording || state.isProcessing || state.isStartingRecording || state.isLocalCallRecording;
   el.btnDictate.disabled = state.isProcessing || state.isStartingRecording;
   el.btnRewrite.disabled = state.isProcessing || state.isStartingRecording;
   el.btnRewriteLlm.disabled = state.isProcessing || state.isStartingRecording;
@@ -1986,9 +2453,11 @@ function refreshControls() {
   el.btnCodex.disabled = state.isProcessing || state.isStartingRecording;
   el.applyTextAction.disabled = busy;
   el.chatAsk.disabled = busy;
-  el.stopBtn.disabled = !busy;
+  el.stopBtn.disabled = !(state.isRecording || state.isProcessing || state.isLocalCallRecording);
+  el.startLocalCallRecordingBtn.disabled = state.isRecording || state.isProcessing || state.isStartingRecording || state.isLocalCallRecording;
+  el.stopLocalCallRecordingBtn.disabled = !state.isLocalCallRecording;
   if (el.recordingTag) {
-    const showRecording = state.isRecording || state.isStartingRecording;
+    const showRecording = state.isRecording || state.isStartingRecording || state.isLocalCallRecording;
     el.recordingTag.classList.toggle('hidden', !showRecording);
   }
 }
@@ -2091,6 +2560,11 @@ function renderHistory() {
 }
 
 function handleStop() {
+  if (state.isLocalCallRecording) {
+    void stopLocalCallRecording();
+    return;
+  }
+
   if (state.isRecording) {
     stopRecording();
     return;
