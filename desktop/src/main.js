@@ -1973,8 +1973,10 @@ async function handleLocalCallRecordingStopped() {
     if (!rawText) throw new Error('Transcrição vazia para a gravação local.');
 
     const finalText = rawText.trim();
-    el.resultText.value = finalText;
-    updateMetrics();
+    if (fromAutomation) {
+      el.resultText.value = finalText;
+      updateMetrics();
+    }
     addHistory(finalText, 'dictate', rawText, { source: 'local_call_recording', fileName, filePath });
     log(`[call] Gravação local transcrita com sucesso (${fileName}).`);
 
@@ -2128,11 +2130,22 @@ async function processAudioFilePath(filePath, fromAutomation = false) {
     addHistory(finalText, 'dictate', rawText, { source: fromAutomation ? 'auto_calls' : 'file_upload', fileName, filePath });
     log(`[stt] Arquivo "${fileName}" transcrito com sucesso.`);
     if (state.config.autoSummaryFromAudio) {
-      const summary = await summarizeTranscript(finalText, state.abortController.signal);
-      if (summary) {
+      try {
+        const summary = await summarizeTranscript(finalText, state.abortController.signal);
+        if (!summary) throw new Error('Resumo vazio.');
         el.audioSummaryOutput.textContent = summary;
         addHistory(`Resumo de ${fileName}\n\n${summary}`, 'chat', finalText, { source: 'audio_summary', fileName, filePath });
         log('[llm] Resumo automático da transcrição gerado.');
+      } catch (summaryErr) {
+        const fallbackSummary = summarizeTranscriptLocal(finalText);
+        el.audioSummaryOutput.textContent = fallbackSummary;
+        addHistory(`Resumo de ${fileName}\n\n${fallbackSummary}`, 'chat', finalText, {
+          source: 'audio_summary',
+          fileName,
+          filePath,
+          fallback: true,
+        });
+        log(`[llm] Resumo local gerado após falha da LLM: ${summaryErr.message}`);
       }
     }
     renderFileTranscriptHistory();
@@ -2166,6 +2179,22 @@ async function summarizeTranscript(text, signal) {
     '4) próximos passos acionáveis.\n\n' +
     `Transcrição:\n${trimmed}`;
   return await llmComplete(prompt, signal);
+}
+
+function summarizeTranscriptLocal(text) {
+  const trimmed = (text || '').replace(/\s+/g, ' ').trim();
+  if (!trimmed) return 'Sem conteúdo suficiente para resumir.';
+  const sentences = trimmed
+    .split(/(?<=[.!?])\s+/)
+    .map((item) => item.trim())
+    .filter(Boolean);
+  const excerpt = sentences.slice(0, 3).join(' ') || trimmed.slice(0, 500);
+  return [
+    '**Resumo automático local:**',
+    excerpt,
+    '',
+    '**Observação:** a LLM não conseguiu gerar o resumo avançado neste momento; este resumo local usa os trechos principais da transcrição.',
+  ].join('\n');
 }
 
 function callAnalysisId(filePath) {
