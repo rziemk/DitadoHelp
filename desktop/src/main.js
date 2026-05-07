@@ -1,10 +1,11 @@
 import { documentDir, join } from '@tauri-apps/api/path';
+import { invoke } from '@tauri-apps/api/core';
 import { open as openDialog, save as saveDialog } from '@tauri-apps/plugin-dialog';
 import { exists, mkdir, readDir, readFile, readTextFile, writeFile, writeTextFile } from '@tauri-apps/plugin-fs';
 
 const STORAGE_KEY = 'scribeflowai.desktop.config.v2';
 const LEGACY_STORAGE_KEYS = ['helpscribe.desktop.config.v2', 'helpscribe.desktop.config.v1'];
-const APP_VERSION = '0.1.36';
+const APP_VERSION = '0.1.37';
 const HISTORY_FILE_NAME = 'conversations.jsonl';
 const HISTORY_SUBDIR = 'Scribeflowai';
 const HISTORY_LIMIT = 200;
@@ -1752,6 +1753,7 @@ async function handleRecordingStopped() {
       el.resultText.value = finalText;
       updateMetrics();
       addHistory(finalText, state.mode, rawText, { combinedWithEditor: state.config.appendDictation && hadExistingText });
+      await pasteResultText(finalText);
       log('[rec] Resultado pronto.');
     }
   } catch (err) {
@@ -1775,6 +1777,24 @@ async function handleRecordingStopped() {
     }
     state.recordingMimeType = '';
     state.recordingExt = 'webm';
+  }
+}
+
+async function pasteResultText(text) {
+  const finalText = (text || '').trim();
+  if (!finalText) return;
+  try {
+    await navigator.clipboard.writeText(finalText);
+  } catch (err) {
+    log(`[paste] Não foi possível copiar para clipboard: ${err.message}`);
+  }
+
+  if (!isTauriRuntime) return;
+  try {
+    await invoke('paste_text', { text: finalText });
+    log('[paste] Texto colado automaticamente.');
+  } catch (err) {
+    log(`[paste] Texto copiado, mas colagem automática falhou: ${err}`);
   }
 }
 

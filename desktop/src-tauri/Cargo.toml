@@ -1,6 +1,6 @@
 [package]
 name = "scribeflowai_desktop"
-version = "0.1.36"
+version = "0.1.37"
 description = "Scribeflowai cross-platform desktop app"
 authors = ["Scribeflowai"]
 license = "Proprietary"
