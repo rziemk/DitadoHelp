@@ -73,35 +73,7 @@ fn copy_to_clipboard(text: &str) -> Result<(), String> {
 
 #[tauri::command]
 fn paste_text(text: String) -> Result<(), String> {
-    copy_to_clipboard(&text)?;
-
-    if !is_accessibility_trusted(true) {
-        let _ = Command::new("open")
-            .arg("x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility")
-            .spawn();
-        return Err("Permissao de Acessibilidade pendente. O texto foi copiado, mas o macOS bloqueou a colagem automatica.".to_string());
-    }
-
-    let script = r#"tell application "System Events"
-  set frontApp to name of first application process whose frontmost is true
-  if frontApp is "Scribeflowai" or frontApp is "scribeflowai_desktop" then
-    key code 48 using command down
-    delay 0.2
-  end if
-  key code 9 using command down
-end tell"#;
-
-    let output = Command::new("osascript")
-        .arg("-e")
-        .arg(script)
-        .output()
-        .map_err(|err| format!("osascript falhou: {err}"))?;
-
-    if output.status.success() {
-        Ok(())
-    } else {
-        Err(String::from_utf8_lossy(&output.stderr).trim().to_string())
-    }
+    copy_to_clipboard(&text)
 }
 
 #[tauri::command]

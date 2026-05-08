@@ -5,7 +5,7 @@ import { exists, mkdir, readDir, readFile, readTextFile, writeFile, writeTextFil
 
 const STORAGE_KEY = 'scribeflowai.desktop.config.v2';
 const LEGACY_STORAGE_KEYS = ['helpscribe.desktop.config.v2', 'helpscribe.desktop.config.v1'];
-const APP_VERSION = '0.1.42';
+const APP_VERSION = '0.1.43';
 const HISTORY_FILE_NAME = 'conversations.jsonl';
 const HISTORY_SUBDIR = 'Scribeflowai';
 const HISTORY_LIMIT = 200;
@@ -1798,10 +1798,10 @@ async function pasteResultText(text) {
   if (!isTauriRuntime) return;
   try {
     await invoke('paste_text', { text: finalText });
-    log('[paste] Texto colado automaticamente.');
+    log('[paste] Texto copiado para clipboard.');
   } catch (err) {
-    log(`[paste] Texto copiado, mas colagem automática falhou: ${err}`);
-    showNotice('Texto transcrito e copiado. Para colar automaticamente, libere Acessibilidade para o Scribeflowai nos Ajustes do macOS.', 'error');
+    log(`[paste] Não foi possível copiar via Tauri: ${err}`);
+    showNotice('Texto transcrito no box, mas não consegui copiar para o clipboard.', 'error');
   }
 }
 
