@@ -575,7 +575,7 @@ body {
   padding: 10px;
   background: #fff;
   display: grid;
-  grid-template-rows: auto auto 1fr;
+  grid-template-rows: auto auto auto auto auto auto 1fr;
   gap: 10px;
 }
 .call-analysis-head {
@@ -610,6 +610,16 @@ body {
   font-weight: 700;
   color: #1e293b;
   overflow-wrap: anywhere;
+}
+.call-analysis-check {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  gap: 6px;
+  align-items: start;
+}
+.call-delete-btn {
+  justify-self: start;
+  padding: 5px 8px;
 }
 .call-analysis-status {
   font-size: 12px;

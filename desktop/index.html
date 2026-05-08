@@ -272,12 +272,26 @@
             <div class="call-analysis-layout">
               <aside class="call-analysis-list">
                 <div class="call-analysis-head">
+                  <strong>Grupos</strong>
+                  <button id="newCallGroupBtn" class="btn secondary small">Novo</button>
+                </div>
+                <select id="callGroupSelect" class="field"></select>
+                <input id="callGroupName" class="field" placeholder="Nome do grupo de comparação" />
+                <div class="inline-actions">
+                  <button id="saveCallGroupBtn" class="btn secondary small">Salvar grupo</button>
+                  <button id="deleteCallGroupBtn" class="btn ghost small">Excluir grupo</button>
+                </div>
+                <div class="call-analysis-head">
                   <strong>Ligações</strong>
                   <span id="callAnalysisCount" class="muted">0 itens</span>
                 </div>
                 <div class="inline-actions">
-                  <button id="addCallAnalysisFileBtn" class="btn secondary small">Carregar áudio</button>
+                  <button id="addCallAnalysisFileBtn" class="btn secondary small">Carregar grupo de ligações</button>
                   <button id="addCallAnalysisFolderBtn" class="btn ghost small">Carregar pasta</button>
+                </div>
+                <div class="inline-actions">
+                  <button id="selectAllCallAnalysesBtn" class="btn ghost small">Selecionar todas</button>
+                  <button id="deleteSelectedCallAnalysesBtn" class="btn ghost small">Excluir selecionadas</button>
                 </div>
                 <div id="callAnalysisList" class="call-analysis-items"></div>
               </aside>
@@ -285,12 +299,16 @@
               <section class="call-analysis-workspace">
                 <div class="call-analysis-card">
                   <div class="call-analysis-head">
-                    <strong>O que deveria acontecer</strong>
-                    <button id="runCallAnalysisBtn" class="btn secondary small">Comparar conversa</button>
+                    <strong>Script de referência</strong>
+                    <div class="inline-actions">
+                      <button id="saveCallScriptBtn" class="btn ghost small">Salvar script</button>
+                      <button id="runCallAnalysisBtn" class="btn secondary small">Comparar selecionadas</button>
+                    </div>
                   </div>
+                  <input id="callScriptName" class="field" placeholder="Nome do script. Ex: Itaú cobrança, Bradesco renegociação..." />
                   <textarea id="callExpectedPrompt" class="call-expected-input" placeholder="Descreva objetivo, roteiro, pontos obrigatórios, perguntas esperadas e resultado ideal da ligação..."></textarea>
                   <div class="inline-actions">
-                    <button id="transcribeSelectedCallBtn" class="btn ghost small">Transcrever selecionada</button>
+                    <button id="transcribeSelectedCallBtn" class="btn ghost small">Transcrever selecionadas</button>
                     <button id="transcribeAllCallsBtn" class="btn ghost small">Transcrever todas</button>
                   </div>
                 </div>

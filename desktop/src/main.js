@@ -5,7 +5,8 @@ import { exists, mkdir, readDir, readFile, readTextFile, writeFile, writeTextFil
 
 const STORAGE_KEY = 'scribeflowai.desktop.config.v2';
 const LEGACY_STORAGE_KEYS = ['helpscribe.desktop.config.v2', 'helpscribe.desktop.config.v1'];
-const APP_VERSION = '0.1.43';
+const APP_VERSION = '0.1.44';
+const CALL_COMPARISON_GROUPS_KEY = 'scribeflowai.callComparisonGroups.v1';
 const HISTORY_FILE_NAME = 'conversations.jsonl';
 const HISTORY_SUBDIR = 'Scribeflowai';
 const HISTORY_LIMIT = 200;
@@ -158,6 +159,9 @@ const state = {
   isLocalCallRecording: false,
   callAnalyses: [],
   selectedCallAnalysis: null,
+  callComparisonGroups: [],
+  selectedCallGroupId: '',
+  selectedCallAnalysisIds: new Set(),
 };
 
 const el = {
@@ -258,6 +262,15 @@ const el = {
   localCallRecordingStatus: document.getElementById('localCallRecordingStatus'),
   addCallAnalysisFileBtn: document.getElementById('addCallAnalysisFileBtn'),
   addCallAnalysisFolderBtn: document.getElementById('addCallAnalysisFolderBtn'),
+  newCallGroupBtn: document.getElementById('newCallGroupBtn'),
+  callGroupSelect: document.getElementById('callGroupSelect'),
+  callGroupName: document.getElementById('callGroupName'),
+  saveCallGroupBtn: document.getElementById('saveCallGroupBtn'),
+  deleteCallGroupBtn: document.getElementById('deleteCallGroupBtn'),
+  selectAllCallAnalysesBtn: document.getElementById('selectAllCallAnalysesBtn'),
+  deleteSelectedCallAnalysesBtn: document.getElementById('deleteSelectedCallAnalysesBtn'),
+  saveCallScriptBtn: document.getElementById('saveCallScriptBtn'),
+  callScriptName: document.getElementById('callScriptName'),
   callAnalysisList: document.getElementById('callAnalysisList'),
   callAnalysisCount: document.getElementById('callAnalysisCount'),
   callExpectedPrompt: document.getElementById('callExpectedPrompt'),
@@ -299,6 +312,7 @@ async function boot() {
   await restoreSession();
   await checkForUpdates();
   renderHistory();
+  initializeCallComparisonGroups();
   updateMetrics();
   setActiveMode('dictate');
   setWorkspaceView('main');
@@ -671,6 +685,14 @@ function wireEvents() {
     persistConfig();
     restartAutoImportMonitor();
   });
+
+  el.newCallGroupBtn.addEventListener('click', () => createCallComparisonGroup());
+  el.callGroupSelect.addEventListener('change', () => selectCallComparisonGroup(el.callGroupSelect.value));
+  el.saveCallGroupBtn.addEventListener('click', () => saveCurrentCallComparisonGroup());
+  el.deleteCallGroupBtn.addEventListener('click', () => deleteCurrentCallComparisonGroup());
+  el.saveCallScriptBtn.addEventListener('click', () => saveCurrentCallScript());
+  el.selectAllCallAnalysesBtn.addEventListener('click', () => selectAllCallAnalyses());
+  el.deleteSelectedCallAnalysesBtn.addEventListener('click', () => deleteSelectedCallAnalyses());
 
   el.addCallAnalysisFileBtn.addEventListener('click', async () => {
     await withButtonLoading(el.addCallAnalysisFileBtn, 'Abrindo...', async () => {
@@ -2271,24 +2293,184 @@ function callAnalysisId(filePath) {
   return `${filePath}:${Date.now()}:${Math.random().toString(16).slice(2)}`;
 }
 
+function callGroupId() {
+  return `group:${Date.now()}:${Math.random().toString(16).slice(2)}`;
+}
+
+function createEmptyCallGroup(name = 'Novo grupo de comparação') {
+  return {
+    id: callGroupId(),
+    name,
+    scriptName: '',
+    expected: '',
+    calls: [],
+    createdAt: new Date().toISOString(),
+    updatedAt: new Date().toISOString(),
+  };
+}
+
+function normalizeCallComparisonGroups(groups) {
+  if (!Array.isArray(groups)) return [];
+  return groups.map((group) => ({
+    id: group.id || callGroupId(),
+    name: group.name || 'Grupo sem nome',
+    scriptName: group.scriptName || '',
+    expected: group.expected || '',
+    calls: Array.isArray(group.calls) ? group.calls : [],
+    createdAt: group.createdAt || new Date().toISOString(),
+    updatedAt: group.updatedAt || new Date().toISOString(),
+  }));
+}
+
+function loadCallComparisonGroups() {
+  try {
+    return normalizeCallComparisonGroups(JSON.parse(localStorage.getItem(CALL_COMPARISON_GROUPS_KEY) || '[]'));
+  } catch {
+    return [];
+  }
+}
+
+function persistCallComparisonGroups() {
+  localStorage.setItem(CALL_COMPARISON_GROUPS_KEY, JSON.stringify(state.callComparisonGroups));
+}
+
+function currentCallComparisonGroup() {
+  return state.callComparisonGroups.find((group) => group.id === state.selectedCallGroupId) || null;
+}
+
+function syncCurrentCallGroupCalls() {
+  const group = currentCallComparisonGroup();
+  state.callAnalyses = group?.calls || [];
+  if (state.selectedCallAnalysis != null && !state.callAnalyses[state.selectedCallAnalysis]) {
+    state.selectedCallAnalysis = state.callAnalyses.length ? 0 : null;
+  }
+}
+
+function initializeCallComparisonGroups() {
+  state.callComparisonGroups = loadCallComparisonGroups();
+  if (!state.callComparisonGroups.length) {
+    const legacyGroup = createEmptyCallGroup('Comparação inicial');
+    legacyGroup.calls = state.callAnalyses || [];
+    state.callComparisonGroups.push(legacyGroup);
+  }
+  state.selectedCallGroupId = state.callComparisonGroups[0]?.id || '';
+  syncCurrentCallGroupCalls();
+  renderCallGroupSelector();
+  renderSelectedCallAnalysis();
+}
+
+function renderCallGroupSelector() {
+  el.callGroupSelect.innerHTML = '';
+  state.callComparisonGroups.forEach((group) => {
+    const option = document.createElement('option');
+    option.value = group.id;
+    option.textContent = group.name;
+    el.callGroupSelect.appendChild(option);
+  });
+  el.callGroupSelect.value = state.selectedCallGroupId;
+  const group = currentCallComparisonGroup();
+  el.callGroupName.value = group?.name || '';
+  el.callScriptName.value = group?.scriptName || '';
+  el.callExpectedPrompt.value = group?.expected || '';
+  syncCurrentCallGroupCalls();
+  renderCallAnalysisList();
+}
+
+function selectCallComparisonGroup(groupId) {
+  saveCurrentCallComparisonGroup({ silent: true });
+  state.selectedCallGroupId = groupId;
+  state.selectedCallAnalysis = null;
+  state.selectedCallAnalysisIds.clear();
+  syncCurrentCallGroupCalls();
+  renderCallGroupSelector();
+}
+
+function createCallComparisonGroup() {
+  saveCurrentCallComparisonGroup({ silent: true });
+  const name = window.prompt('Nome do grupo de comparação:', 'Novo grupo de comparação');
+  if (!name) return;
+  const group = createEmptyCallGroup(name.trim());
+  state.callComparisonGroups.unshift(group);
+  state.selectedCallGroupId = group.id;
+  state.selectedCallAnalysis = null;
+  state.selectedCallAnalysisIds.clear();
+  persistCallComparisonGroups();
+  renderCallGroupSelector();
+  log(`[calls] Grupo criado: ${group.name}.`);
+}
+
+function saveCurrentCallComparisonGroup(options = {}) {
+  const group = currentCallComparisonGroup();
+  if (!group) return;
+  group.name = el.callGroupName.value.trim() || group.name || 'Grupo sem nome';
+  group.scriptName = el.callScriptName.value.trim();
+  group.expected = el.callExpectedPrompt.value.trim();
+  group.calls = state.callAnalyses;
+  group.updatedAt = new Date().toISOString();
+  persistCallComparisonGroups();
+  renderCallGroupSelector();
+  if (!options.silent) log(`[calls] Grupo salvo: ${group.name}.`);
+}
+
+function saveCurrentCallScript() {
+  saveCurrentCallComparisonGroup({ silent: true });
+  const group = currentCallComparisonGroup();
+  log(`[calls] Script salvo no grupo: ${group?.scriptName || group?.name || 'grupo atual'}.`);
+}
+
+function deleteCurrentCallComparisonGroup() {
+  const group = currentCallComparisonGroup();
+  if (!group) return;
+  if (state.callComparisonGroups.length === 1) {
+    state.callComparisonGroups = [createEmptyCallGroup('Comparação inicial')];
+  } else {
+    state.callComparisonGroups = state.callComparisonGroups.filter((item) => item.id !== group.id);
+  }
+  state.selectedCallGroupId = state.callComparisonGroups[0]?.id || '';
+  state.selectedCallAnalysis = null;
+  state.selectedCallAnalysisIds.clear();
+  persistCallComparisonGroups();
+  renderCallGroupSelector();
+  log(`[calls] Grupo excluído: ${group.name}.`);
+}
+
 function selectedCallAnalysisItem() {
   if (state.selectedCallAnalysis == null) return null;
   return state.callAnalyses[state.selectedCallAnalysis] || null;
 }
 
+function selectedCallAnalysisItems() {
+  const selected = state.callAnalyses.filter((item) => state.selectedCallAnalysisIds.has(item.id));
+  return selected.length ? selected : selectedCallAnalysisItem() ? [selectedCallAnalysisItem()] : [];
+}
+
 function renderCallAnalysisList() {
+  syncCurrentCallGroupCalls();
   el.callAnalysisList.innerHTML = '';
   el.callAnalysisCount.textContent = `${state.callAnalyses.length} ${state.callAnalyses.length === 1 ? 'item' : 'itens'}`;
 
   state.callAnalyses.forEach((item, index) => {
-    const row = document.createElement('button');
-    row.type = 'button';
+    const row = document.createElement('div');
     row.className = `call-analysis-item${index === state.selectedCallAnalysis ? ' selected' : ''}`;
     row.innerHTML = `
-      <span class="call-analysis-file">${escapeHtml(item.fileName)}</span>
-      <span class="call-analysis-status">${escapeHtml(item.status)}</span>
+      <label class="call-analysis-check">
+        <input type="checkbox" ${state.selectedCallAnalysisIds.has(item.id) ? 'checked' : ''} />
+        <span class="call-analysis-file">${escapeHtml(item.fileName)}</span>
+      </label>
+      <span class="call-analysis-status">${escapeHtml(item.status)}${item.score != null ? ` • Nota ${item.score}` : ''}</span>
+      <button type="button" class="btn ghost small call-delete-btn">Excluir</button>
     `;
-    row.addEventListener('click', () => {
+    row.querySelector('.call-analysis-check input').addEventListener('change', (ev) => {
+      if (ev.target.checked) state.selectedCallAnalysisIds.add(item.id);
+      else state.selectedCallAnalysisIds.delete(item.id);
+      renderCallAnalysisList();
+    });
+    row.querySelector('.call-delete-btn').addEventListener('click', (ev) => {
+      ev.stopPropagation();
+      deleteCallAnalysisItem(item.id);
+    });
+    row.addEventListener('click', (ev) => {
+      if (ev.target.closest('input,button')) return;
       state.selectedCallAnalysis = index;
       renderCallAnalysisList();
       renderSelectedCallAnalysis();
@@ -2303,14 +2485,12 @@ function renderSelectedCallAnalysis() {
   const item = selectedCallAnalysisItem();
   if (!item) {
     el.selectedCallStatus.textContent = 'Nenhuma ligação selecionada';
-    el.callExpectedPrompt.value = '';
     el.callTranscriptOutput.textContent = 'A transcrição aparecerá aqui.';
     el.callAnalysisOutput.textContent = 'A análise aparecerá aqui.';
     return;
   }
 
-  el.selectedCallStatus.textContent = item.status;
-  el.callExpectedPrompt.value = item.expected || '';
+  el.selectedCallStatus.textContent = `${item.status}${item.score != null ? ` • Nota ${item.score}` : ''}`;
   el.callTranscriptOutput.textContent = item.speakerTranscript || item.rawTranscript || 'Ainda sem transcrição.';
   el.callAnalysisOutput.textContent = item.analysis || 'A análise aparecerá aqui.';
 }
@@ -2326,10 +2506,10 @@ function upsertCallAnalysisFiles(filePaths) {
         filePath,
         fileName,
         status: 'Pendente',
-        expected: '',
         rawTranscript: '',
         speakerTranscript: '',
         analysis: '',
+        score: null,
         error: '',
       });
     });
@@ -2337,7 +2517,44 @@ function upsertCallAnalysisFiles(filePaths) {
   if (state.selectedCallAnalysis == null && state.callAnalyses.length) {
     state.selectedCallAnalysis = 0;
   }
+  saveCurrentCallComparisonGroup({ silent: true });
   renderCallAnalysisList();
+}
+
+function deleteCallAnalysisItem(itemId) {
+  const index = state.callAnalyses.findIndex((item) => item.id === itemId);
+  if (index < 0) return;
+  const [removed] = state.callAnalyses.splice(index, 1);
+  state.selectedCallAnalysisIds.delete(itemId);
+  if (state.selectedCallAnalysis === index) state.selectedCallAnalysis = state.callAnalyses.length ? 0 : null;
+  if (state.selectedCallAnalysis != null && state.selectedCallAnalysis > index) state.selectedCallAnalysis -= 1;
+  saveCurrentCallComparisonGroup({ silent: true });
+  renderCallAnalysisList();
+  log(`[calls] Ligação excluída: ${removed.fileName}.`);
+}
+
+function selectAllCallAnalyses() {
+  const allSelected = state.callAnalyses.length > 0 && state.callAnalyses.every((item) => state.selectedCallAnalysisIds.has(item.id));
+  state.selectedCallAnalysisIds.clear();
+  if (!allSelected) state.callAnalyses.forEach((item) => state.selectedCallAnalysisIds.add(item.id));
+  renderCallAnalysisList();
+}
+
+function deleteSelectedCallAnalyses() {
+  if (!state.selectedCallAnalysisIds.size) {
+    log('[calls] Nenhuma ligação selecionada para excluir.');
+    return;
+  }
+  const before = state.callAnalyses.length;
+  state.callAnalyses = state.callAnalyses.filter((item) => !state.selectedCallAnalysisIds.has(item.id));
+  const removed = before - state.callAnalyses.length;
+  const group = currentCallComparisonGroup();
+  if (group) group.calls = state.callAnalyses;
+  state.selectedCallAnalysisIds.clear();
+  state.selectedCallAnalysis = state.callAnalyses.length ? 0 : null;
+  saveCurrentCallComparisonGroup({ silent: true });
+  renderCallAnalysisList();
+  log(`[calls] ${removed} ligação(ões) excluída(s).`);
 }
 
 async function addCallAnalysisFile() {
@@ -2362,12 +2579,14 @@ async function addCallAnalysisFolder() {
 }
 
 async function transcribeSelectedCallAnalysis() {
-  const item = selectedCallAnalysisItem();
-  if (!item) {
-    log('[calls] Selecione uma ligação para transcrever.');
+  const items = selectedCallAnalysisItems().filter((item) => !item.rawTranscript);
+  if (!items.length) {
+    log('[calls] Selecione uma ou mais ligações pendentes para transcrever.');
     return;
   }
-  await transcribeCallAnalysisItem(item);
+  for (const item of items) {
+    await transcribeCallAnalysisItem(item);
+  }
   renderCallAnalysisList();
 }
 
@@ -2429,6 +2648,7 @@ async function transcribeCallAnalysisItem(item) {
       fileName: item.fileName,
       filePath: item.filePath,
     });
+    saveCurrentCallComparisonGroup({ silent: true });
     log(`[calls] Ligação "${item.fileName}" transcrita para análise.`);
   } catch (err) {
     item.status = 'Erro';
@@ -2455,16 +2675,25 @@ async function diarizeTranscriptSemantically(transcript, signal) {
 }
 
 async function runSelectedCallComparison() {
-  const item = selectedCallAnalysisItem();
-  if (!item) {
-    log('[calls] Selecione uma ligação para comparar.');
+  saveCurrentCallComparisonGroup({ silent: true });
+  const group = currentCallComparisonGroup();
+  const items = selectedCallAnalysisItems();
+  if (!items.length) {
+    log('[calls] Selecione uma ou mais ligações para comparar.');
     return;
   }
-  item.expected = el.callExpectedPrompt.value.trim();
-  if (!item.expected) {
-    log('[calls] Descreva o que deveria ter acontecido antes de comparar.');
+  const expected = group?.expected || el.callExpectedPrompt.value.trim();
+  if (!expected) {
+    log('[calls] Salve ou descreva o script de referência antes de comparar.');
     return;
   }
+  for (const item of items) {
+    await runCallComparisonItem(item, expected, group);
+  }
+  renderCallAnalysisList();
+}
+
+async function runCallComparisonItem(item, expected, group) {
   if (!item.speakerTranscript && !item.rawTranscript) {
     await transcribeCallAnalysisItem(item);
   }
@@ -2490,16 +2719,23 @@ async function runSelectedCallComparison() {
       'Evidências da conversa\n' +
       'Próximos passos recomendados\n' +
       'Score de aderência de 0 a 100\n\n' +
-      `Esperado:\n${item.expected}\n\n` +
+      `Grupo de comparação: ${group?.name || 'Sem nome'}\n` +
+      `Script de referência: ${group?.scriptName || 'Sem nome'}\n\n` +
+      `Esperado:\n${expected}\n\n` +
       `Conversa transcrita:\n${transcript}`;
     item.analysis = await llmComplete(prompt, state.abortController.signal);
+    item.score = extractScore(item.analysis);
     item.status = 'Analisada';
     el.callAnalysisOutput.textContent = item.analysis || 'Análise vazia.';
     addHistory(`Análise de ${item.fileName}\n\n${item.analysis}`, 'chat', transcript, {
       source: 'call_comparison',
+      groupName: group?.name || '',
+      scriptName: group?.scriptName || '',
+      score: item.score,
       fileName: item.fileName,
       filePath: item.filePath,
     });
+    saveCurrentCallComparisonGroup({ silent: true });
     log(`[calls] Comparação gerada para "${item.fileName}".`);
   } catch (err) {
     item.status = 'Erro';
@@ -2512,6 +2748,14 @@ async function runSelectedCallComparison() {
     refreshControls();
     renderCallAnalysisList();
   }
+}
+
+function extractScore(text = '') {
+  const explicit = text.match(/score[^0-9]{0,20}(\d{1,3})/i) || text.match(/nota[^0-9]{0,20}(\d{1,3})/i);
+  if (!explicit) return null;
+  const score = Number(explicit[1]);
+  if (!Number.isFinite(score)) return null;
+  return Math.max(0, Math.min(100, score));
 }
 
 function mimeToExt(mime) {
