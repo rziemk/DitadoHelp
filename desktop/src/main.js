@@ -5,8 +5,9 @@ import { exists, mkdir, readDir, readFile, readTextFile, writeFile, writeTextFil
 
 const STORAGE_KEY = 'scribeflowai.desktop.config.v2';
 const LEGACY_STORAGE_KEYS = ['helpscribe.desktop.config.v2', 'helpscribe.desktop.config.v1'];
-const APP_VERSION = '0.1.44';
+const APP_VERSION = '0.1.45';
 const CALL_COMPARISON_GROUPS_KEY = 'scribeflowai.callComparisonGroups.v1';
+const CALL_COMPARISON_SCRIPTS_KEY = 'scribeflowai.callComparisonScripts.v1';
 const HISTORY_FILE_NAME = 'conversations.jsonl';
 const HISTORY_SUBDIR = 'Scribeflowai';
 const HISTORY_LIMIT = 200;
@@ -159,6 +160,8 @@ const state = {
   isLocalCallRecording: false,
   callAnalyses: [],
   selectedCallAnalysis: null,
+  callComparisonScripts: [],
+  selectedCallScriptId: '',
   callComparisonGroups: [],
   selectedCallGroupId: '',
   selectedCallAnalysisIds: new Set(),
@@ -263,7 +266,13 @@ const el = {
   addCallAnalysisFileBtn: document.getElementById('addCallAnalysisFileBtn'),
   addCallAnalysisFolderBtn: document.getElementById('addCallAnalysisFolderBtn'),
   newCallGroupBtn: document.getElementById('newCallGroupBtn'),
-  callGroupSelect: document.getElementById('callGroupSelect'),
+  callScriptCount: document.getElementById('callScriptCount'),
+  callScriptList: document.getElementById('callScriptList'),
+  newCallScriptBtn: document.getElementById('newCallScriptBtn'),
+  deleteCallScriptBtn: document.getElementById('deleteCallScriptBtn'),
+  callGroupList: document.getElementById('callGroupList'),
+  callGroupScriptSelect: document.getElementById('callGroupScriptSelect'),
+  callGroupAssociationStatus: document.getElementById('callGroupAssociationStatus'),
   callGroupName: document.getElementById('callGroupName'),
   saveCallGroupBtn: document.getElementById('saveCallGroupBtn'),
   deleteCallGroupBtn: document.getElementById('deleteCallGroupBtn'),
@@ -281,6 +290,8 @@ const el = {
   selectedCallStatus: document.getElementById('selectedCallStatus'),
   callTranscriptOutput: document.getElementById('callTranscriptOutput'),
   callAnalysisOutput: document.getElementById('callAnalysisOutput'),
+  callResultsList: document.getElementById('callResultsList'),
+  callGroupSummaryOutput: document.getElementById('callGroupSummaryOutput'),
   historyList: document.getElementById('historyList'),
   historyUse: document.getElementById('historyUse'),
   historyCopy: document.getElementById('historyCopy'),
@@ -687,10 +698,12 @@ function wireEvents() {
   });
 
   el.newCallGroupBtn.addEventListener('click', () => createCallComparisonGroup());
-  el.callGroupSelect.addEventListener('change', () => selectCallComparisonGroup(el.callGroupSelect.value));
   el.saveCallGroupBtn.addEventListener('click', () => saveCurrentCallComparisonGroup());
   el.deleteCallGroupBtn.addEventListener('click', () => deleteCurrentCallComparisonGroup());
+  el.newCallScriptBtn.addEventListener('click', () => createNewCallScriptDraft());
   el.saveCallScriptBtn.addEventListener('click', () => saveCurrentCallScript());
+  el.deleteCallScriptBtn.addEventListener('click', () => deleteCurrentCallScript());
+  el.callGroupScriptSelect.addEventListener('change', () => associateCurrentGroupToScript(el.callGroupScriptSelect.value));
   el.selectAllCallAnalysesBtn.addEventListener('click', () => selectAllCallAnalyses());
   el.deleteSelectedCallAnalysesBtn.addEventListener('click', () => deleteSelectedCallAnalyses());
 
@@ -2297,16 +2310,41 @@ function callGroupId() {
   return `group:${Date.now()}:${Math.random().toString(16).slice(2)}`;
 }
 
+function callScriptId() {
+  return `script:${Date.now()}:${Math.random().toString(16).slice(2)}`;
+}
+
+function createEmptyCallScript(name = 'Novo script de comparação', body = '') {
+  return {
+    id: callScriptId(),
+    name,
+    body,
+    createdAt: new Date().toISOString(),
+    updatedAt: new Date().toISOString(),
+  };
+}
+
 function createEmptyCallGroup(name = 'Novo grupo de comparação') {
   return {
     id: callGroupId(),
     name,
-    scriptName: '',
-    expected: '',
+    scriptId: '',
     calls: [],
+    summary: '',
     createdAt: new Date().toISOString(),
     updatedAt: new Date().toISOString(),
   };
+}
+
+function normalizeCallComparisonScripts(scripts) {
+  if (!Array.isArray(scripts)) return [];
+  return scripts.map((script) => ({
+    id: script.id || callScriptId(),
+    name: script.name || 'Script sem nome',
+    body: script.body || script.expected || '',
+    createdAt: script.createdAt || new Date().toISOString(),
+    updatedAt: script.updatedAt || new Date().toISOString(),
+  }));
 }
 
 function normalizeCallComparisonGroups(groups) {
@@ -2314,12 +2352,20 @@ function normalizeCallComparisonGroups(groups) {
   return groups.map((group) => ({
     id: group.id || callGroupId(),
     name: group.name || 'Grupo sem nome',
-    scriptName: group.scriptName || '',
-    expected: group.expected || '',
+    scriptId: group.scriptId || '',
     calls: Array.isArray(group.calls) ? group.calls : [],
+    summary: group.summary || '',
     createdAt: group.createdAt || new Date().toISOString(),
     updatedAt: group.updatedAt || new Date().toISOString(),
   }));
+}
+
+function loadCallComparisonScripts() {
+  try {
+    return normalizeCallComparisonScripts(JSON.parse(localStorage.getItem(CALL_COMPARISON_SCRIPTS_KEY) || '[]'));
+  } catch {
+    return [];
+  }
 }
 
 function loadCallComparisonGroups() {
@@ -2330,12 +2376,26 @@ function loadCallComparisonGroups() {
   }
 }
 
+function persistCallComparisonScripts() {
+  localStorage.setItem(CALL_COMPARISON_SCRIPTS_KEY, JSON.stringify(state.callComparisonScripts));
+}
+
 function persistCallComparisonGroups() {
   localStorage.setItem(CALL_COMPARISON_GROUPS_KEY, JSON.stringify(state.callComparisonGroups));
 }
 
+function currentCallComparisonScript() {
+  return state.callComparisonScripts.find((script) => script.id === state.selectedCallScriptId) || null;
+}
+
 function currentCallComparisonGroup() {
   return state.callComparisonGroups.find((group) => group.id === state.selectedCallGroupId) || null;
+}
+
+function scriptForCurrentGroup() {
+  const group = currentCallComparisonGroup();
+  if (!group?.scriptId) return null;
+  return state.callComparisonScripts.find((script) => script.id === group.scriptId) || null;
 }
 
 function syncCurrentCallGroupCalls() {
@@ -2347,33 +2407,98 @@ function syncCurrentCallGroupCalls() {
 }
 
 function initializeCallComparisonGroups() {
+  state.callComparisonScripts = loadCallComparisonScripts();
   state.callComparisonGroups = loadCallComparisonGroups();
   if (!state.callComparisonGroups.length) {
     const legacyGroup = createEmptyCallGroup('Comparação inicial');
     legacyGroup.calls = state.callAnalyses || [];
     state.callComparisonGroups.push(legacyGroup);
   }
+  migrateLegacyGroupScripts();
+  if (!state.callComparisonScripts.length) {
+    state.callComparisonScripts.push(createEmptyCallScript('Script inicial', ''));
+  }
+  state.selectedCallScriptId = state.callComparisonScripts[0]?.id || '';
   state.selectedCallGroupId = state.callComparisonGroups[0]?.id || '';
   syncCurrentCallGroupCalls();
-  renderCallGroupSelector();
+  renderCallScriptList();
+  renderCallGroupList();
   renderSelectedCallAnalysis();
 }
 
-function renderCallGroupSelector() {
-  el.callGroupSelect.innerHTML = '';
+function migrateLegacyGroupScripts() {
+  let changed = false;
   state.callComparisonGroups.forEach((group) => {
-    const option = document.createElement('option');
-    option.value = group.id;
-    option.textContent = group.name;
-    el.callGroupSelect.appendChild(option);
+    if (group.scriptId || (!group.expected && !group.scriptName)) return;
+    const script = createEmptyCallScript(group.scriptName || `Script de ${group.name}`, group.expected || '');
+    state.callComparisonScripts.push(script);
+    group.scriptId = script.id;
+    delete group.scriptName;
+    delete group.expected;
+    changed = true;
   });
-  el.callGroupSelect.value = state.selectedCallGroupId;
+  if (changed) {
+    persistCallComparisonScripts();
+    persistCallComparisonGroups();
+  }
+}
+
+function renderCallScriptList() {
+  el.callScriptList.innerHTML = '';
+  el.callScriptCount.textContent = `${state.callComparisonScripts.length} ${state.callComparisonScripts.length === 1 ? 'script' : 'scripts'}`;
+  state.callComparisonScripts.forEach((script) => {
+    const row = document.createElement('button');
+    row.type = 'button';
+    row.className = `call-analysis-item${script.id === state.selectedCallScriptId ? ' selected' : ''}`;
+    row.innerHTML = `
+      <span class="call-analysis-file">${escapeHtml(script.name)}</span>
+      <span class="call-analysis-status">${escapeHtml((script.body || '').slice(0, 90))}${script.body?.length > 90 ? '...' : ''}</span>
+    `;
+    row.addEventListener('click', () => selectCallComparisonScript(script.id));
+    el.callScriptList.appendChild(row);
+  });
+  const script = currentCallComparisonScript();
+  el.callScriptName.value = script?.name || '';
+  el.callExpectedPrompt.value = script?.body || '';
+  renderGroupScriptSelect();
+}
+
+function renderCallGroupList() {
+  el.callGroupList.innerHTML = '';
+  state.callComparisonGroups.forEach((group) => {
+    const script = group.scriptId ? state.callComparisonScripts.find((item) => item.id === group.scriptId) : null;
+    const row = document.createElement('button');
+    row.type = 'button';
+    row.className = `call-analysis-item${group.id === state.selectedCallGroupId ? ' selected' : ''}${script ? ' associated' : ''}`;
+    row.innerHTML = `
+      <span class="call-analysis-file">${escapeHtml(group.name)}</span>
+      <span class="call-analysis-status">${group.calls?.length || 0} ligações${script ? ` • Script: ${escapeHtml(script.name)}` : ' • Sem script'}</span>
+    `;
+    row.addEventListener('click', () => selectCallComparisonGroup(group.id));
+    el.callGroupList.appendChild(row);
+  });
   const group = currentCallComparisonGroup();
   el.callGroupName.value = group?.name || '';
-  el.callScriptName.value = group?.scriptName || '';
-  el.callExpectedPrompt.value = group?.expected || '';
   syncCurrentCallGroupCalls();
+  renderGroupScriptSelect();
   renderCallAnalysisList();
+}
+
+function renderGroupScriptSelect() {
+  el.callGroupScriptSelect.innerHTML = '<option value="">Associar script ao grupo...</option>';
+  state.callComparisonScripts.forEach((script) => {
+    const option = document.createElement('option');
+    option.value = script.id;
+    option.textContent = script.name;
+    el.callGroupScriptSelect.appendChild(option);
+  });
+  const group = currentCallComparisonGroup();
+  el.callGroupScriptSelect.value = group?.scriptId || '';
+  const script = scriptForCurrentGroup();
+  el.callGroupAssociationStatus.textContent = script ? `Associado: ${script.name}` : 'Sem script associado';
+  el.callGroupAssociationStatus.classList.toggle('associated', Boolean(script));
+  el.callGroupSummaryOutput.textContent = group?.summary || 'Nenhuma análise em lote ainda.';
+  renderCallResultsList();
 }
 
 function selectCallComparisonGroup(groupId) {
@@ -2382,12 +2507,26 @@ function selectCallComparisonGroup(groupId) {
   state.selectedCallAnalysis = null;
   state.selectedCallAnalysisIds.clear();
   syncCurrentCallGroupCalls();
-  renderCallGroupSelector();
+  renderCallGroupList();
+}
+
+function selectCallComparisonScript(scriptId) {
+  state.selectedCallScriptId = scriptId;
+  renderCallScriptList();
+}
+
+function createNewCallScriptDraft() {
+  state.selectedCallScriptId = '';
+  el.callScriptName.value = '';
+  el.callExpectedPrompt.value = '';
+  renderCallScriptList();
+  el.callScriptName.focus();
+  log('[calls] Novo script em edição.');
 }
 
 function createCallComparisonGroup() {
   saveCurrentCallComparisonGroup({ silent: true });
-  const name = window.prompt('Nome do grupo de comparação:', 'Novo grupo de comparação');
+  const name = window.prompt('Nome do grupo de ligações:', 'Novo grupo de ligações');
   if (!name) return;
   const group = createEmptyCallGroup(name.trim());
   state.callComparisonGroups.unshift(group);
@@ -2395,7 +2534,7 @@ function createCallComparisonGroup() {
   state.selectedCallAnalysis = null;
   state.selectedCallAnalysisIds.clear();
   persistCallComparisonGroups();
-  renderCallGroupSelector();
+  renderCallGroupList();
   log(`[calls] Grupo criado: ${group.name}.`);
 }
 
@@ -2403,19 +2542,69 @@ function saveCurrentCallComparisonGroup(options = {}) {
   const group = currentCallComparisonGroup();
   if (!group) return;
   group.name = el.callGroupName.value.trim() || group.name || 'Grupo sem nome';
-  group.scriptName = el.callScriptName.value.trim();
-  group.expected = el.callExpectedPrompt.value.trim();
   group.calls = state.callAnalyses;
   group.updatedAt = new Date().toISOString();
   persistCallComparisonGroups();
-  renderCallGroupSelector();
+  renderCallGroupList();
   if (!options.silent) log(`[calls] Grupo salvo: ${group.name}.`);
 }
 
 function saveCurrentCallScript() {
-  saveCurrentCallComparisonGroup({ silent: true });
+  const name = el.callScriptName.value.trim();
+  const body = el.callExpectedPrompt.value.trim();
+  if (!name || !body) {
+    log('[calls] Informe nome e conteúdo do script antes de salvar.');
+    return;
+  }
+  let script = currentCallComparisonScript();
+  if (!script || !state.callComparisonScripts.some((item) => item.id === script.id)) {
+    script = createEmptyCallScript(name, body);
+    state.callComparisonScripts.unshift(script);
+    state.selectedCallScriptId = script.id;
+  } else {
+    script.name = name;
+    script.body = body;
+    script.updatedAt = new Date().toISOString();
+  }
+  persistCallComparisonScripts();
+  renderCallScriptList();
+  renderCallGroupList();
+  log(`[calls] Script salvo: ${script.name}.`);
+}
+
+function deleteCurrentCallScript() {
+  const script = currentCallComparisonScript();
+  if (!script) return;
+  const linkedGroups = state.callComparisonGroups.filter((group) => group.scriptId === script.id);
+  const hasUntranscribed = linkedGroups.some((group) => (group.calls || []).some((call) => !call.rawTranscript));
+  if (hasUntranscribed) {
+    showNotice('Não é possível excluir este script: existe grupo associado com ligações ainda não transcritas.', 'error');
+    log('[calls] Exclusão bloqueada: script possui ligações associadas não transcritas.');
+    return;
+  }
+  state.callComparisonScripts = state.callComparisonScripts.filter((item) => item.id !== script.id);
+  state.callComparisonGroups.forEach((group) => {
+    if (group.scriptId === script.id) group.scriptId = '';
+  });
+  if (!state.callComparisonScripts.length) {
+    state.callComparisonScripts.push(createEmptyCallScript('Script inicial', ''));
+  }
+  state.selectedCallScriptId = state.callComparisonScripts[0]?.id || '';
+  persistCallComparisonScripts();
+  persistCallComparisonGroups();
+  renderCallScriptList();
+  renderCallGroupList();
+  log(`[calls] Script excluído: ${script.name}.`);
+}
+
+function associateCurrentGroupToScript(scriptId) {
   const group = currentCallComparisonGroup();
-  log(`[calls] Script salvo no grupo: ${group?.scriptName || group?.name || 'grupo atual'}.`);
+  if (!group) return;
+  group.scriptId = scriptId || '';
+  group.updatedAt = new Date().toISOString();
+  persistCallComparisonGroups();
+  renderCallGroupList();
+  log(scriptId ? '[calls] Script associado ao grupo.' : '[calls] Script desassociado do grupo.');
 }
 
 function deleteCurrentCallComparisonGroup() {
@@ -2430,7 +2619,7 @@ function deleteCurrentCallComparisonGroup() {
   state.selectedCallAnalysis = null;
   state.selectedCallAnalysisIds.clear();
   persistCallComparisonGroups();
-  renderCallGroupSelector();
+  renderCallGroupList();
   log(`[calls] Grupo excluído: ${group.name}.`);
 }
 
@@ -2682,18 +2871,22 @@ async function runSelectedCallComparison() {
     log('[calls] Selecione uma ou mais ligações para comparar.');
     return;
   }
-  const expected = group?.expected || el.callExpectedPrompt.value.trim();
-  if (!expected) {
-    log('[calls] Salve ou descreva o script de referência antes de comparar.');
+  const script = scriptForCurrentGroup();
+  if (!script?.body?.trim()) {
+    log('[calls] Associe um script de comparação ao grupo antes de comparar.');
     return;
   }
   for (const item of items) {
-    await runCallComparisonItem(item, expected, group);
+    await runCallComparisonItem(item, script, group);
   }
+  group.summary = buildCallGroupSummary(group);
+  persistCallComparisonGroups();
   renderCallAnalysisList();
+  renderCallResultsList();
+  renderGroupScriptSelect();
 }
 
-async function runCallComparisonItem(item, expected, group) {
+async function runCallComparisonItem(item, script, group) {
   if (!item.speakerTranscript && !item.rawTranscript) {
     await transcribeCallAnalysisItem(item);
   }
@@ -2720,8 +2913,8 @@ async function runCallComparisonItem(item, expected, group) {
       'Próximos passos recomendados\n' +
       'Score de aderência de 0 a 100\n\n' +
       `Grupo de comparação: ${group?.name || 'Sem nome'}\n` +
-      `Script de referência: ${group?.scriptName || 'Sem nome'}\n\n` +
-      `Esperado:\n${expected}\n\n` +
+      `Script de referência: ${script?.name || 'Sem nome'}\n\n` +
+      `Esperado:\n${script.body}\n\n` +
       `Conversa transcrita:\n${transcript}`;
     item.analysis = await llmComplete(prompt, state.abortController.signal);
     item.score = extractScore(item.analysis);
@@ -2730,7 +2923,7 @@ async function runCallComparisonItem(item, expected, group) {
     addHistory(`Análise de ${item.fileName}\n\n${item.analysis}`, 'chat', transcript, {
       source: 'call_comparison',
       groupName: group?.name || '',
-      scriptName: group?.scriptName || '',
+      scriptName: script?.name || '',
       score: item.score,
       fileName: item.fileName,
       filePath: item.filePath,
@@ -2748,6 +2941,52 @@ async function runCallComparisonItem(item, expected, group) {
     refreshControls();
     renderCallAnalysisList();
   }
+}
+
+function buildCallGroupSummary(group) {
+  const analyzed = (group.calls || []).filter((item) => item.analysis);
+  if (!analyzed.length) return 'Nenhuma ligação analisada ainda.';
+  const scored = analyzed.filter((item) => item.score != null);
+  const avg = scored.length
+    ? Math.round(scored.reduce((sum, item) => sum + Number(item.score || 0), 0) / scored.length)
+    : null;
+  const worst = scored.slice().sort((a, b) => Number(a.score || 0) - Number(b.score || 0))[0];
+  const best = scored.slice().sort((a, b) => Number(b.score || 0) - Number(a.score || 0))[0];
+  return [
+    `${analyzed.length} ligação(ões) analisada(s).`,
+    avg != null ? `Nota média: ${avg}.` : 'Sem notas estruturadas extraídas.',
+    best ? `Melhor aderência: ${best.fileName} (${best.score}).` : '',
+    worst ? `Pior aderência: ${worst.fileName} (${worst.score}).` : '',
+  ].filter(Boolean).join(' ');
+}
+
+function renderCallResultsList() {
+  if (!el.callResultsList) return;
+  const group = currentCallComparisonGroup();
+  const calls = group?.calls || [];
+  el.callResultsList.innerHTML = '';
+  const analyzed = calls.filter((item) => item.analysis || item.score != null);
+  if (!analyzed.length) {
+    el.callResultsList.textContent = 'Nenhum resultado gerado ainda.';
+    return;
+  }
+  analyzed.forEach((item) => {
+    const row = document.createElement('button');
+    row.type = 'button';
+    row.className = 'call-result-item';
+    row.innerHTML = `
+      <strong>${escapeHtml(item.fileName)}</strong>
+      <span>${item.score != null ? `Nota ${item.score}` : 'Sem nota'} • ${escapeHtml(item.status)}</span>
+    `;
+    row.addEventListener('click', () => {
+      const idx = state.callAnalyses.findIndex((call) => call.id === item.id);
+      if (idx >= 0) {
+        state.selectedCallAnalysis = idx;
+        renderCallAnalysisList();
+      }
+    });
+    el.callResultsList.appendChild(row);
+  });
 }
 
 function extractScore(text = '') {
