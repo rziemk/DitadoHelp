@@ -110,6 +110,17 @@ async function router(request, env) {
     return await handleConversationPush(env, session.user.id, session.device.id, body);
   }
 
+  if (pathname === '/sync/call-comparisons' && request.method === 'GET') {
+    const session = await requireSession(request, env);
+    return await handleCallComparisonsPull(env, session.user.id);
+  }
+
+  if (pathname === '/sync/call-comparisons' && request.method === 'POST') {
+    const session = await requireSession(request, env);
+    const body = await request.json();
+    return await handleCallComparisonsPush(env, session.user.id, body);
+  }
+
   if (pathname === '/updates/latest' && request.method === 'GET') {
     const channel = url.searchParams.get('channel') || 'stable';
     const update = await env.DB.prepare(
@@ -447,6 +458,190 @@ async function handleConversationPush(env, userId, deviceId, body) {
   }
 
   return json({ ok: true, received: items.length });
+}
+
+async function handleCallComparisonsPull(env, userId) {
+  const scriptsRows = await env.DB.prepare(
+    `SELECT id, name, body, created_at, updated_at, deleted_at
+     FROM call_comparison_scripts
+     WHERE user_id = ?1 AND deleted_at IS NULL
+     ORDER BY updated_at DESC`,
+  ).bind(userId).all();
+
+  const groupRows = await env.DB.prepare(
+    `SELECT id, script_id, name, source_type, source_path, source_loaded_at, summary,
+            average_score, good_count, bad_count, analyzed_count, total_count, created_at, updated_at, deleted_at
+     FROM call_comparison_groups
+     WHERE user_id = ?1 AND deleted_at IS NULL
+     ORDER BY updated_at DESC`,
+  ).bind(userId).all();
+
+  const recordingRows = await env.DB.prepare(
+    `SELECT id, group_id, file_name, file_path, status, is_transcribed, raw_transcript, speaker_transcript,
+            transcript_summary, analysis, comparison_summary, score, is_good, error, transcribed_at, analyzed_at,
+            created_at, updated_at, deleted_at
+     FROM call_recordings
+     WHERE user_id = ?1 AND deleted_at IS NULL
+     ORDER BY updated_at DESC`,
+  ).bind(userId).all();
+
+  const callsByGroup = new Map();
+  for (const row of recordingRows.results || []) {
+    if (!callsByGroup.has(row.group_id)) callsByGroup.set(row.group_id, []);
+    callsByGroup.get(row.group_id).push({
+      ...row,
+      is_transcribed: Boolean(row.is_transcribed),
+      is_good: row.is_good == null ? null : Boolean(row.is_good),
+    });
+  }
+
+  return json({
+    scripts: scriptsRows.results || [],
+    groups: (groupRows.results || []).map((group) => ({
+      ...group,
+      calls: callsByGroup.get(group.id) || [],
+    })),
+  });
+}
+
+async function handleCallComparisonsPush(env, userId, body) {
+  const scripts = Array.isArray(body?.scripts) ? body.scripts : [];
+  const groups = Array.isArray(body?.groups) ? body.groups : [];
+  const now = nowIso();
+
+  for (const script of scripts) {
+    const id = trimString(script?.id) || crypto.randomUUID();
+    const name = trimString(script?.name) || 'Script sem nome';
+    const scriptBody = trimString(script?.body);
+    const createdAt = trimString(script?.created_at) || now;
+    const updatedAt = trimString(script?.updated_at) || now;
+    await env.DB.prepare(
+      `INSERT INTO call_comparison_scripts (id, user_id, name, body, created_at, updated_at, deleted_at)
+       VALUES (?1, ?2, ?3, ?4, ?5, ?6, NULL)
+       ON CONFLICT(id) DO UPDATE SET
+         name = excluded.name,
+         body = excluded.body,
+         updated_at = excluded.updated_at,
+         deleted_at = NULL`,
+    ).bind(id, userId, name, scriptBody, createdAt, updatedAt).run();
+  }
+
+  for (const group of groups) {
+    const id = trimString(group?.id) || crypto.randomUUID();
+    const calls = Array.isArray(group?.calls) ? group.calls : [];
+    const stats = callGroupStats(calls);
+    const createdAt = trimString(group?.created_at) || now;
+    const updatedAt = trimString(group?.updated_at) || now;
+    await env.DB.prepare(
+      `INSERT INTO call_comparison_groups (
+         id, user_id, script_id, name, source_type, source_path, source_loaded_at, summary,
+         average_score, good_count, bad_count, analyzed_count, total_count, created_at, updated_at, deleted_at
+       ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, NULL)
+       ON CONFLICT(id) DO UPDATE SET
+         script_id = excluded.script_id,
+         name = excluded.name,
+         source_type = excluded.source_type,
+         source_path = excluded.source_path,
+         source_loaded_at = excluded.source_loaded_at,
+         summary = excluded.summary,
+         average_score = excluded.average_score,
+         good_count = excluded.good_count,
+         bad_count = excluded.bad_count,
+         analyzed_count = excluded.analyzed_count,
+         total_count = excluded.total_count,
+         updated_at = excluded.updated_at,
+         deleted_at = NULL`,
+    ).bind(
+      id,
+      userId,
+      trimString(group?.script_id) || null,
+      trimString(group?.name) || 'Grupo sem nome',
+      trimString(group?.source_type),
+      trimString(group?.source_path),
+      trimString(group?.source_loaded_at),
+      trimString(group?.summary),
+      stats.averageScore,
+      stats.goodCount,
+      stats.badCount,
+      stats.analyzedCount,
+      stats.totalCount,
+      createdAt,
+      updatedAt,
+    ).run();
+
+    for (const call of calls) {
+      const callId = trimString(call?.id) || crypto.randomUUID();
+      const score = normalizeScore(call?.score);
+      const isTranscribed = call?.is_transcribed || call?.raw_transcript || call?.speaker_transcript ? 1 : 0;
+      const isGood = call?.is_good == null && score == null ? null : call?.is_good === false ? 0 : call?.is_good === true ? 1 : score >= 70 ? 1 : 0;
+      const callCreatedAt = trimString(call?.created_at) || createdAt;
+      const callUpdatedAt = trimString(call?.updated_at) || updatedAt;
+      await env.DB.prepare(
+        `INSERT INTO call_recordings (
+           id, user_id, group_id, file_name, file_path, status, is_transcribed, raw_transcript, speaker_transcript,
+           transcript_summary, analysis, comparison_summary, score, is_good, error, transcribed_at, analyzed_at,
+           created_at, updated_at, deleted_at
+         ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, NULL)
+         ON CONFLICT(id) DO UPDATE SET
+           group_id = excluded.group_id,
+           file_name = excluded.file_name,
+           file_path = excluded.file_path,
+           status = excluded.status,
+           is_transcribed = excluded.is_transcribed,
+           raw_transcript = excluded.raw_transcript,
+           speaker_transcript = excluded.speaker_transcript,
+           transcript_summary = excluded.transcript_summary,
+           analysis = excluded.analysis,
+           comparison_summary = excluded.comparison_summary,
+           score = excluded.score,
+           is_good = excluded.is_good,
+           error = excluded.error,
+           transcribed_at = excluded.transcribed_at,
+           analyzed_at = excluded.analyzed_at,
+           updated_at = excluded.updated_at,
+           deleted_at = NULL`,
+      ).bind(
+        callId,
+        userId,
+        id,
+        trimString(call?.file_name) || 'audio',
+        trimString(call?.file_path),
+        trimString(call?.status) || 'Pendente',
+        isTranscribed,
+        trimString(call?.raw_transcript),
+        trimString(call?.speaker_transcript),
+        trimString(call?.transcript_summary),
+        trimString(call?.analysis),
+        trimString(call?.comparison_summary),
+        score,
+        isGood,
+        trimString(call?.error),
+        trimString(call?.transcribed_at),
+        trimString(call?.analyzed_at),
+        callCreatedAt,
+        callUpdatedAt,
+      ).run();
+    }
+  }
+
+  return json({ ok: true, scripts: scripts.length, groups: groups.length });
+}
+
+function callGroupStats(calls) {
+  const totalCount = calls.length;
+  const analyzed = calls.filter((call) => trimString(call?.analysis) || call?.score != null);
+  const scored = calls.map((call) => normalizeScore(call?.score)).filter((score) => score != null);
+  const goodCount = scored.filter((score) => score >= 70).length;
+  const badCount = scored.filter((score) => score < 70).length;
+  const averageScore = scored.length ? Math.round(scored.reduce((sum, score) => sum + score, 0) / scored.length) : null;
+  return { totalCount, analyzedCount: analyzed.length, goodCount, badCount, averageScore };
+}
+
+function normalizeScore(value) {
+  if (value === null || value === undefined || value === '') return null;
+  const score = Number(value);
+  if (!Number.isFinite(score)) return null;
+  return Math.max(0, Math.min(100, Math.round(score)));
 }
 
 async function handleSettingsGet(env, userId) {
@@ -897,7 +1092,7 @@ function json(payload, status = 200) {
 function withCors(response) {
   response.headers.set('access-control-allow-origin', '*');
   response.headers.set('access-control-allow-headers', 'authorization, content-type');
-  response.headers.set('access-control-allow-methods', 'GET, POST, OPTIONS');
+  response.headers.set('access-control-allow-methods', 'GET, POST, PUT, OPTIONS');
   return response;
 }
 

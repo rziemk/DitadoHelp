@@ -5,7 +5,7 @@ import { exists, mkdir, readDir, readFile, readTextFile, writeFile, writeTextFil
 
 const STORAGE_KEY = 'scribeflowai.desktop.config.v2';
 const LEGACY_STORAGE_KEYS = ['helpscribe.desktop.config.v2', 'helpscribe.desktop.config.v1'];
-const APP_VERSION = '0.1.47';
+const APP_VERSION = '0.1.48';
 const CALL_COMPARISON_GROUPS_KEY = 'scribeflowai.callComparisonGroups.v1';
 const CALL_COMPARISON_SCRIPTS_KEY = 'scribeflowai.callComparisonScripts.v1';
 const HISTORY_FILE_NAME = 'conversations.jsonl';
@@ -165,6 +165,7 @@ const state = {
   callComparisonGroups: [],
   selectedCallGroupId: '',
   selectedCallAnalysisIds: new Set(),
+  isCloudSyncingCallComparisons: false,
 };
 
 const el = {
@@ -1258,6 +1259,7 @@ async function completeLogin(payload) {
   startHeartbeat();
   await syncUserSettings('pull');
   await syncConversations();
+  await syncCallComparisons();
   log(`[auth] Sessao iniciada para ${state.authUser?.email || 'usuario'}.`);
 }
 
@@ -1322,6 +1324,7 @@ async function restoreSession() {
     startHeartbeat();
     await syncUserSettings('pull');
     await syncConversations();
+    await syncCallComparisons();
     log('[auth] Sessao restaurada.');
   } catch (error) {
     log(`[auth] Sessao anterior invalida: ${error.message}`);
@@ -1416,6 +1419,126 @@ async function syncConversations() {
   }
 }
 
+function serializeCallScriptForCloud(script) {
+  return {
+    id: script.id,
+    name: script.name,
+    body: script.body,
+    created_at: script.createdAt || new Date().toISOString(),
+    updated_at: script.updatedAt || script.createdAt || new Date().toISOString(),
+  };
+}
+
+function serializeCallGroupForCloud(group) {
+  return {
+    id: group.id,
+    name: group.name,
+    script_id: group.scriptId || '',
+    source_type: group.sourceType || '',
+    source_path: group.sourcePath || '',
+    source_loaded_at: group.sourceLoadedAt || '',
+    summary: group.summary || '',
+    created_at: group.createdAt || new Date().toISOString(),
+    updated_at: group.updatedAt || group.createdAt || new Date().toISOString(),
+    calls: (group.calls || []).map((item) => ({
+      id: item.id,
+      file_name: item.fileName,
+      file_path: item.filePath,
+      status: item.status,
+      is_transcribed: Boolean(item.rawTranscript || item.speakerTranscript),
+      raw_transcript: item.rawTranscript || '',
+      speaker_transcript: item.speakerTranscript || '',
+      transcript_summary: item.transcriptSummary || '',
+      analysis: item.analysis || '',
+      comparison_summary: item.comparisonSummary || '',
+      score: item.score,
+      is_good: item.isGood,
+      error: item.error || '',
+      transcribed_at: item.transcribedAt || '',
+      analyzed_at: item.analyzedAt || '',
+      created_at: item.createdAt || new Date().toISOString(),
+      updated_at: item.updatedAt || item.createdAt || new Date().toISOString(),
+    })),
+  };
+}
+
+function mergeCloudCallComparisons(payload) {
+  const scripts = Array.isArray(payload?.scripts) ? normalizeCallComparisonScripts(payload.scripts.map((script) => ({
+    id: script.id,
+    name: script.name,
+    body: script.body,
+    createdAt: script.created_at,
+    updatedAt: script.updated_at,
+  }))) : [];
+  const groups = Array.isArray(payload?.groups) ? normalizeCallComparisonGroups(payload.groups.map((group) => ({
+    id: group.id,
+    name: group.name,
+    scriptId: group.script_id,
+    sourceType: group.source_type,
+    sourcePath: group.source_path,
+    sourceLoadedAt: group.source_loaded_at,
+    summary: group.summary,
+    createdAt: group.created_at,
+    updatedAt: group.updated_at,
+    calls: Array.isArray(group.calls) ? group.calls : [],
+  }))) : [];
+
+  const scriptMap = new Map(state.callComparisonScripts.map((script) => [script.id, script]));
+  scripts.forEach((script) => {
+    const current = scriptMap.get(script.id);
+    if (!current || new Date(script.updatedAt || 0) > new Date(current.updatedAt || 0)) {
+      scriptMap.set(script.id, script);
+    }
+  });
+  state.callComparisonScripts = [...scriptMap.values()].sort((a, b) => new Date(b.updatedAt || 0) - new Date(a.updatedAt || 0));
+
+  const groupMap = new Map(state.callComparisonGroups.map((group) => [group.id, group]));
+  groups.forEach((group) => {
+    const current = groupMap.get(group.id);
+    if (!current || new Date(group.updatedAt || 0) > new Date(current.updatedAt || 0)) {
+      groupMap.set(group.id, group);
+    }
+  });
+  state.callComparisonGroups = [...groupMap.values()].sort((a, b) => new Date(b.updatedAt || 0) - new Date(a.updatedAt || 0));
+  if (!state.callComparisonGroups.some((group) => group.id === state.selectedCallGroupId)) {
+    state.selectedCallGroupId = state.callComparisonGroups[0]?.id || '';
+  }
+  if (!state.callComparisonScripts.some((script) => script.id === state.selectedCallScriptId)) {
+    state.selectedCallScriptId = state.callComparisonScripts[0]?.id || '';
+  }
+  syncCurrentCallGroupCalls();
+  renderCallScriptList();
+  renderCallGroupList();
+  renderSelectedCallAnalysis();
+}
+
+async function syncCallComparisons() {
+  if (!isAuthenticated()) {
+    log('[sync] Faca login para sincronizar analises de ligacoes.');
+    return;
+  }
+  state.isCloudSyncingCallComparisons = true;
+  try {
+    await apiRequest('/sync/call-comparisons', {
+      method: 'POST',
+      body: JSON.stringify({
+        scripts: state.callComparisonScripts.map(serializeCallScriptForCloud),
+        groups: state.callComparisonGroups.map(serializeCallGroupForCloud),
+      }),
+    });
+    const payload = await apiRequest('/sync/call-comparisons', { method: 'GET' });
+    mergeCloudCallComparisons(payload);
+    localStorage.setItem(CALL_COMPARISON_SCRIPTS_KEY, JSON.stringify(state.callComparisonScripts));
+    localStorage.setItem(CALL_COMPARISON_GROUPS_KEY, JSON.stringify(state.callComparisonGroups));
+    clearCloudSyncPending();
+    log('[sync] Analises de ligacoes sincronizadas com D1.');
+  } catch (error) {
+    log(`[sync] Falha ao sincronizar analises de ligacoes: ${error.message}`);
+  } finally {
+    state.isCloudSyncingCallComparisons = false;
+  }
+}
+
 function buildSettingsPayload() {
   return {
     settings: {
@@ -1504,6 +1627,7 @@ async function syncAllCloudData() {
   }
   await syncUserSettings('push');
   await syncConversations();
+  await syncCallComparisons();
 }
 
 async function confirmSyncBeforeLeaving() {
@@ -2358,6 +2482,38 @@ function createEmptyCallGroup(name = 'Novo grupo de comparação') {
   };
 }
 
+function normalizeCallAnalysisItem(item) {
+  const filePath = item?.filePath || item?.file_path || '';
+  const fileName = item?.fileName || item?.file_name || filePath.split('/').pop()?.split('\\').pop() || 'audio';
+  const rawTranscript = item?.rawTranscript || item?.raw_transcript || '';
+  const speakerTranscript = item?.speakerTranscript || item?.speaker_transcript || '';
+  const transcriptSummary = item?.transcriptSummary || item?.transcript_summary || '';
+  const analysis = item?.analysis || '';
+  const comparisonSummary = item?.comparisonSummary || item?.comparison_summary || '';
+  const scoreValue = item?.score ?? null;
+  const score = scoreValue === null || scoreValue === '' ? null : Number(scoreValue);
+  const transcribedAt = item?.transcribedAt || item?.transcribed_at || '';
+  const analyzedAt = item?.analyzedAt || item?.analyzed_at || '';
+  return {
+    id: item?.id || callAnalysisId(filePath || fileName),
+    filePath,
+    fileName,
+    status: item?.status || (analysis ? 'Analisada' : rawTranscript || speakerTranscript ? 'Transcrita' : 'Pendente'),
+    rawTranscript,
+    speakerTranscript,
+    transcriptSummary,
+    analysis,
+    comparisonSummary,
+    score: Number.isFinite(score) ? Math.max(0, Math.min(100, score)) : null,
+    isGood: typeof item?.isGood === 'boolean' ? item.isGood : typeof item?.is_good === 'boolean' ? item.is_good : Number.isFinite(score) ? score >= 70 : null,
+    error: item?.error || '',
+    transcribedAt,
+    analyzedAt,
+    createdAt: item?.createdAt || item?.created_at || new Date().toISOString(),
+    updatedAt: item?.updatedAt || item?.updated_at || item?.createdAt || item?.created_at || new Date().toISOString(),
+  };
+}
+
 function normalizeCallComparisonScripts(scripts) {
   if (!Array.isArray(scripts)) return [];
   return scripts.map((script) => ({
@@ -2378,7 +2534,7 @@ function normalizeCallComparisonGroups(groups) {
     sourceType: group.sourceType || '',
     sourcePath: group.sourcePath || '',
     sourceLoadedAt: group.sourceLoadedAt || '',
-    calls: Array.isArray(group.calls) ? group.calls : [],
+    calls: Array.isArray(group.calls) ? group.calls.map(normalizeCallAnalysisItem) : [],
     summary: group.summary || '',
     createdAt: group.createdAt || new Date().toISOString(),
     updatedAt: group.updatedAt || new Date().toISOString(),
@@ -2403,10 +2559,19 @@ function loadCallComparisonGroups() {
 
 function persistCallComparisonScripts() {
   localStorage.setItem(CALL_COMPARISON_SCRIPTS_KEY, JSON.stringify(state.callComparisonScripts));
+  markCallComparisonCloudSyncPending();
 }
 
 function persistCallComparisonGroups() {
   localStorage.setItem(CALL_COMPARISON_GROUPS_KEY, JSON.stringify(state.callComparisonGroups));
+  markCallComparisonCloudSyncPending();
+}
+
+function markCallComparisonCloudSyncPending() {
+  if (state.isCloudSyncingCallComparisons) return;
+  if (isAuthenticated()) {
+    markCloudSyncPending('analise de ligacoes');
+  }
 }
 
 function currentCallComparisonScript() {
@@ -2704,16 +2869,33 @@ function renderCallAnalysisList() {
   syncCurrentCallGroupCalls();
   el.callAnalysisList.innerHTML = '';
   el.callAnalysisCount.textContent = `${state.callAnalyses.length} ${state.callAnalyses.length === 1 ? 'item' : 'itens'}`;
+  el.callAnalysisList.classList.toggle('as-table', true);
+
+  const header = document.createElement('div');
+  header.className = 'call-table-row call-table-header';
+  header.innerHTML = `
+    <span></span>
+    <span>Ligação</span>
+    <span>Transcrição</span>
+    <span>Resumo</span>
+    <span>Comparação</span>
+    <span>Nota</span>
+    <span>Ações</span>
+  `;
+  el.callAnalysisList.appendChild(header);
 
   state.callAnalyses.forEach((item, index) => {
     const row = document.createElement('div');
-    row.className = `call-analysis-item${index === state.selectedCallAnalysis ? ' selected' : ''}`;
+    row.className = `call-analysis-item call-table-row${index === state.selectedCallAnalysis ? ' selected' : ''}${item.analysis ? ' analyzed' : ''}`;
     row.innerHTML = `
-      <label class="call-analysis-check">
+      <label class="call-analysis-check table-check">
         <input type="checkbox" ${state.selectedCallAnalysisIds.has(item.id) ? 'checked' : ''} />
-        <span class="call-analysis-file">${escapeHtml(item.fileName)}</span>
       </label>
-      <span class="call-analysis-status">${escapeHtml(item.status)}${item.score != null ? ` • Nota ${item.score}` : ''}</span>
+      <span class="call-analysis-file">${escapeHtml(item.fileName)}</span>
+      <span>${callStatusBadge(item)}</span>
+      <span class="call-analysis-status">${escapeHtml(item.transcriptSummary || transcriptPreview(item))}</span>
+      <span class="call-analysis-status">${escapeHtml(item.comparisonSummary || item.analysis || 'Ainda sem comparação.')}</span>
+      <span>${scoreBadge(item)}</span>
       <button type="button" class="btn ghost small call-delete-btn">Excluir</button>
     `;
     row.querySelector('.call-analysis-check input').addEventListener('change', (ev) => {
@@ -2735,6 +2917,26 @@ function renderCallAnalysisList() {
   });
 
   renderSelectedCallAnalysis();
+}
+
+function callStatusBadge(item) {
+  const isTranscribed = Boolean(item.rawTranscript || item.speakerTranscript);
+  const label = item.error ? 'Erro' : isTranscribed ? 'Transcrita' : 'Pendente';
+  const klass = item.error ? 'bad' : isTranscribed ? 'good' : 'neutral';
+  return `<span class="mini-badge ${klass}">${label}</span>`;
+}
+
+function scoreBadge(item) {
+  if (item.score == null) return '<span class="mini-badge neutral">Sem nota</span>';
+  const klass = item.score >= 70 ? 'good' : 'bad';
+  const label = item.score >= 70 ? 'Boa' : 'Ruim';
+  return `<span class="mini-badge ${klass}">${item.score} • ${label}</span>`;
+}
+
+function transcriptPreview(item) {
+  const text = item.speakerTranscript || item.rawTranscript || '';
+  if (!text) return 'Ainda não transcrita.';
+  return text.length > 120 ? `${text.slice(0, 120)}...` : text;
 }
 
 function renderSelectedCallAnalysis() {
@@ -2770,9 +2972,16 @@ function upsertCallAnalysisFiles(filePaths) {
         status: 'Pendente',
         rawTranscript: '',
         speakerTranscript: '',
+        transcriptSummary: '',
         analysis: '',
+        comparisonSummary: '',
         score: null,
+        isGood: null,
         error: '',
+        transcribedAt: '',
+        analyzedAt: '',
+        createdAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString(),
       });
       existing.add(filePath);
       added += 1;
@@ -2855,11 +3064,19 @@ async function addCallAnalysisFolder() {
 async function transcribeSelectedCallAnalysis() {
   const items = selectedCallAnalysisItems().filter((item) => !item.rawTranscript);
   if (!items.length) {
+    const selected = selectedCallAnalysisItems();
+    if (selected.length && scriptForCurrentGroup()) {
+      await runCallComparisonForItems(selected);
+      return;
+    }
     log('[calls] Selecione uma ou mais ligações pendentes para transcrever.');
     return;
   }
   for (const item of items) {
     await transcribeCallAnalysisItem(item);
+  }
+  if (scriptForCurrentGroup()) {
+    await runCallComparisonForItems(selectedCallAnalysisItems());
   }
   renderCallAnalysisList();
 }
@@ -2873,6 +3090,9 @@ async function transcribeAllCallAnalyses() {
   for (const item of pending) {
     await transcribeCallAnalysisItem(item);
     renderCallAnalysisList();
+  }
+  if (scriptForCurrentGroup()) {
+    await runCallComparisonForItems(state.callAnalyses);
   }
 }
 
@@ -2916,7 +3136,10 @@ async function transcribeCallAnalysisItem(item) {
     item.status = 'Separando interlocutores';
     renderCallAnalysisList();
     item.speakerTranscript = await diarizeTranscriptSemantically(item.rawTranscript, state.abortController.signal);
+    item.transcriptSummary = await summarizeCallTranscript(item.speakerTranscript || item.rawTranscript, state.abortController.signal);
     item.status = 'Transcrita';
+    item.transcribedAt = new Date().toISOString();
+    item.updatedAt = item.transcribedAt;
     addHistory(item.speakerTranscript || item.rawTranscript, 'dictate', item.rawTranscript, {
       source: 'call_analysis',
       fileName: item.fileName,
@@ -2948,12 +3171,25 @@ async function diarizeTranscriptSemantically(transcript, signal) {
   return await llmComplete(prompt, signal);
 }
 
+async function summarizeCallTranscript(transcript, signal) {
+  const prompt =
+    'Resuma a ligação em português em no máximo 2 frases. Informe também se a conversa parece ter sido concluída normalmente ou interrompida/desligada antes do fim.\n' +
+    'Não invente dados que não estejam na transcrição.\n\n' +
+    `Transcrição:\n${transcript}`;
+  try {
+    return await llmComplete(prompt, signal);
+  } catch (err) {
+    log(`[calls] Resumo da transcrição não gerado: ${err.message}`);
+    return transcript.length > 180 ? `${transcript.slice(0, 180)}...` : transcript;
+  }
+}
+
 async function runSelectedCallComparison() {
   saveCurrentCallComparisonGroup({ silent: true });
   const group = currentCallComparisonGroup();
-  const items = selectedCallAnalysisItems();
+  const items = group?.calls || [];
   if (!items.length) {
-    log('[calls] Selecione uma ou mais ligações para comparar.');
+    log('[calls] Carregue ligações no grupo antes de comparar.');
     return;
   }
   const script = scriptForCurrentGroup();
@@ -2961,7 +3197,16 @@ async function runSelectedCallComparison() {
     log('[calls] Associe um script de comparação ao grupo antes de comparar.');
     return;
   }
-  for (const item of items) {
+  await runCallComparisonForItems(items, script, group);
+}
+
+async function runCallComparisonForItems(items, script = scriptForCurrentGroup(), group = currentCallComparisonGroup()) {
+  if (!script?.body?.trim()) {
+    log('[calls] Associe um script de comparação ao grupo antes de comparar.');
+    return;
+  }
+  const pending = items.filter(Boolean);
+  for (const item of pending) {
     await runCallComparisonItem(item, script, group);
   }
   group.summary = buildCallGroupSummary(group);
@@ -2969,6 +3214,9 @@ async function runSelectedCallComparison() {
   renderCallAnalysisList();
   renderCallResultsList();
   renderGroupScriptSelect();
+  if (isAuthenticated() && state.config.autoSyncCloud) {
+    void syncCallComparisons();
+  }
 }
 
 async function runCallComparisonItem(item, script, group) {
@@ -2989,21 +3237,24 @@ async function runCallComparisonItem(item, script, group) {
   try {
     const prompt =
       'Compare o que deveria ter acontecido em uma ligação com o que realmente aconteceu.\n' +
-      'Responda em português com seções objetivas:\n' +
-      'Resumo da ligação\n' +
-      'Pontos cumpridos\n' +
-      'Pontos faltantes\n' +
-      'Divergências relevantes\n' +
-      'Evidências da conversa\n' +
-      'Próximos passos recomendados\n' +
-      'Score de aderência de 0 a 100\n\n' +
+      'Responda APENAS em JSON válido, sem markdown, no formato:\n' +
+      '{"resumo_ligacao":"...","resumo_comparacao":"...","pontos_cumpridos":["..."],"pontos_faltantes":["..."],"divergencias":["..."],"evidencias":["..."],"finalizacao":"concluida|interrompida|indefinida","nota":0,"resultado":"boa|ruim","analise_detalhada":"..."}\n' +
+      'A nota deve ser de 0 a 100. Considere boa somente nota >= 70.\n' +
+      'Se a ligação não chegou ao fechamento, confirmação final ou desligou/interrompeu antes de concluir, marque isso em finalizacao e nos pontos faltantes.\n\n' +
       `Grupo de comparação: ${group?.name || 'Sem nome'}\n` +
       `Script de referência: ${script?.name || 'Sem nome'}\n\n` +
       `Esperado:\n${script.body}\n\n` +
       `Conversa transcrita:\n${transcript}`;
-    item.analysis = await llmComplete(prompt, state.abortController.signal);
-    item.score = extractScore(item.analysis);
+    const llmAnswer = await llmComplete(prompt, state.abortController.signal);
+    const structured = parseCallComparisonResult(llmAnswer);
+    item.transcriptSummary = structured.resumo_ligacao || item.transcriptSummary || '';
+    item.comparisonSummary = structured.resumo_comparacao || '';
+    item.analysis = formatCallComparisonAnalysis(structured, llmAnswer);
+    item.score = structured.nota ?? extractScore(item.analysis);
+    item.isGood = item.score != null ? item.score >= 70 : structured.resultado === 'boa';
     item.status = 'Analisada';
+    item.analyzedAt = new Date().toISOString();
+    item.updatedAt = item.analyzedAt;
     el.callAnalysisOutput.textContent = item.analysis || 'Análise vazia.';
     addHistory(`Análise de ${item.fileName}\n\n${item.analysis}`, 'chat', transcript, {
       source: 'call_comparison',
@@ -3028,6 +3279,65 @@ async function runCallComparisonItem(item, script, group) {
   }
 }
 
+function parseCallComparisonResult(text = '') {
+  const trimmed = text.trim().replace(/^```json\s*/i, '').replace(/^```\s*/i, '').replace(/```$/i, '').trim();
+  try {
+    const parsed = JSON.parse(trimmed);
+    const nota = Number(parsed.nota ?? parsed.score);
+    return {
+      resumo_ligacao: trimString(parsed.resumo_ligacao),
+      resumo_comparacao: trimString(parsed.resumo_comparacao),
+      pontos_cumpridos: Array.isArray(parsed.pontos_cumpridos) ? parsed.pontos_cumpridos.map(trimString).filter(Boolean) : [],
+      pontos_faltantes: Array.isArray(parsed.pontos_faltantes) ? parsed.pontos_faltantes.map(trimString).filter(Boolean) : [],
+      divergencias: Array.isArray(parsed.divergencias) ? parsed.divergencias.map(trimString).filter(Boolean) : [],
+      evidencias: Array.isArray(parsed.evidencias) ? parsed.evidencias.map(trimString).filter(Boolean) : [],
+      finalizacao: trimString(parsed.finalizacao) || 'indefinida',
+      nota: Number.isFinite(nota) ? Math.max(0, Math.min(100, nota)) : null,
+      resultado: trimString(parsed.resultado).toLowerCase(),
+      analise_detalhada: trimString(parsed.analise_detalhada),
+    };
+  } catch {
+    return {
+      resumo_ligacao: '',
+      resumo_comparacao: text.split('\n').find((line) => line.trim()) || '',
+      pontos_cumpridos: [],
+      pontos_faltantes: [],
+      divergencias: [],
+      evidencias: [],
+      finalizacao: /deslig|interromp|cortad/i.test(text) ? 'interrompida' : 'indefinida',
+      nota: extractScore(text),
+      resultado: '',
+      analise_detalhada: text,
+    };
+  }
+}
+
+function formatCallComparisonAnalysis(result, fallbackText = '') {
+  if (!result || (!result.resumo_comparacao && !result.analise_detalhada)) return fallbackText || 'Análise vazia.';
+  const lines = [
+    `Resumo da ligação: ${result.resumo_ligacao || 'Não informado.'}`,
+    `Resumo da comparação: ${result.resumo_comparacao || 'Não informado.'}`,
+    `Nota: ${result.nota != null ? result.nota : 'sem nota'}${result.resultado ? ` (${result.resultado})` : ''}`,
+    `Finalização: ${result.finalizacao || 'indefinida'}`,
+    '',
+    'Pontos cumpridos:',
+    ...(result.pontos_cumpridos.length ? result.pontos_cumpridos.map((item) => `- ${item}`) : ['- Nenhum ponto cumprido informado.']),
+    '',
+    'Pontos faltantes:',
+    ...(result.pontos_faltantes.length ? result.pontos_faltantes.map((item) => `- ${item}`) : ['- Nenhum ponto faltante informado.']),
+    '',
+    'Divergências:',
+    ...(result.divergencias.length ? result.divergencias.map((item) => `- ${item}`) : ['- Nenhuma divergência informada.']),
+    '',
+    'Evidências:',
+    ...(result.evidencias.length ? result.evidencias.map((item) => `- ${item}`) : ['- Nenhuma evidência informada.']),
+  ];
+  if (result.analise_detalhada) {
+    lines.push('', 'Detalhe:', result.analise_detalhada);
+  }
+  return lines.join('\n');
+}
+
 function buildCallGroupSummary(group) {
   const analyzed = (group.calls || []).filter((item) => item.analysis);
   if (!analyzed.length) return 'Nenhuma ligação analisada ainda.';
@@ -3035,11 +3345,14 @@ function buildCallGroupSummary(group) {
   const avg = scored.length
     ? Math.round(scored.reduce((sum, item) => sum + Number(item.score || 0), 0) / scored.length)
     : null;
+  const good = scored.filter((item) => Number(item.score) >= 70).length;
+  const bad = scored.filter((item) => Number(item.score) < 70).length;
   const worst = scored.slice().sort((a, b) => Number(a.score || 0) - Number(b.score || 0))[0];
   const best = scored.slice().sort((a, b) => Number(b.score || 0) - Number(a.score || 0))[0];
   return [
-    `${analyzed.length} ligação(ões) analisada(s).`,
+    `${group.calls?.length || 0} ligação(ões) no grupo. ${analyzed.length} analisada(s).`,
     avg != null ? `Nota média: ${avg}.` : 'Sem notas estruturadas extraídas.',
+    scored.length ? `Boas: ${good}. Ruins: ${bad}.` : '',
     best ? `Melhor aderência: ${best.fileName} (${best.score}).` : '',
     worst ? `Pior aderência: ${worst.fileName} (${worst.score}).` : '',
   ].filter(Boolean).join(' ');
@@ -3061,7 +3374,8 @@ function renderCallResultsList() {
     row.className = 'call-result-item';
     row.innerHTML = `
       <strong>${escapeHtml(item.fileName)}</strong>
-      <span>${item.score != null ? `Nota ${item.score}` : 'Sem nota'} • ${escapeHtml(item.status)}</span>
+      <span>${item.score != null ? `Nota ${item.score}` : 'Sem nota'} • ${item.score != null && item.score >= 70 ? 'Boa' : item.score != null ? 'Ruim' : 'Sem classificação'} • ${escapeHtml(item.status)}</span>
+      <span>${escapeHtml(item.comparisonSummary || item.analysis || 'Sem resumo da comparação.')}</span>
     `;
     row.addEventListener('click', () => {
       const idx = state.callAnalyses.findIndex((call) => call.id === item.id);
