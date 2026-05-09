@@ -604,15 +604,22 @@ body {
   align-content: start;
 }
 .call-analyze-view.active {
-  grid-template-columns: minmax(0, 1fr);
-  align-items: start;
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+}
+.call-analyze-view > .call-analysis-card,
+.call-analyze-view > .call-analysis-detail-grid {
+  flex: 0 0 auto;
 }
 .call-analyze-view > .call-analysis-card:nth-child(2) {
-  min-height: 390px;
+  min-height: 420px;
+  overflow: hidden;
 }
 .call-analyze-view .call-files-list {
-  min-height: 285px;
-  max-height: 42vh;
+  flex: 1 1 auto;
+  min-height: 320px;
+  max-height: 45vh;
 }
 .call-analysis-detail-grid {
   display: grid;
