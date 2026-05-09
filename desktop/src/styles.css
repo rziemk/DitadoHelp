@@ -604,25 +604,26 @@ body {
   align-content: start;
 }
 .call-analyze-view.active {
-  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  grid-template-columns: minmax(0, 1fr);
   align-items: start;
-}
-.call-analyze-view > .call-analysis-card:nth-child(1),
-.call-analyze-view > .call-analysis-card:nth-child(2) {
-  grid-column: 1 / -1;
 }
 .call-analyze-view > .call-analysis-card:nth-child(2) {
   min-height: 390px;
-}
-.call-analyze-view > .call-analysis-card:nth-child(3),
-.call-analyze-view > .call-analysis-card:nth-child(4) {
-  min-height: 300px;
 }
 .call-analyze-view .call-files-list {
   min-height: 285px;
   max-height: 42vh;
 }
-.call-analyze-view .call-analysis-output.tall {
+.call-analysis-detail-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  gap: 10px;
+  min-height: 0;
+}
+.call-analysis-detail-grid .call-analysis-card {
+  min-height: 300px;
+}
+.call-analysis-detail-grid .call-analysis-output.tall {
   min-height: 220px;
   max-height: 38vh;
 }
@@ -942,12 +943,8 @@ body {
     height: auto;
   }
   .chat-card { min-height: 0; }
-  .call-analyze-view.active {
+  .call-analysis-detail-grid {
     grid-template-columns: 1fr;
-  }
-  .call-analyze-view > .call-analysis-card:nth-child(3),
-  .call-analyze-view > .call-analysis-card:nth-child(4) {
-    grid-column: 1 / -1;
   }
 }
 
