@@ -263,6 +263,11 @@ body {
 .btn.secondary { background: #fff; border-color: #cfd9ea; }
 .btn.ghost { background: var(--soft); }
 .btn.danger { background: var(--danger); border-color: var(--danger); color: #fff; }
+.btn.source-active {
+  background: #ecfdf5;
+  border-color: #86efac;
+  color: #166534;
+}
 .btn.small { height: 34px; padding: 0 10px; }
 .kbd {
   margin-left: 4px;
@@ -668,6 +673,22 @@ body {
   border-radius: 12px;
   padding: 6px;
   background: #f8fbff;
+}
+.call-source-label {
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: #f8fbff;
+  color: #64748b;
+  font-size: 12px;
+  font-weight: 700;
+  min-height: 28px;
+  padding: 7px 10px;
+  overflow-wrap: anywhere;
+}
+.call-source-label.active {
+  border-color: #86efac;
+  background: #f0fdf4;
+  color: #166534;
 }
 .call-association-row {
   display: grid;

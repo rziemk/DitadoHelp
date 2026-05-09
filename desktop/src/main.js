@@ -5,7 +5,7 @@ import { exists, mkdir, readDir, readFile, readTextFile, writeFile, writeTextFil
 
 const STORAGE_KEY = 'scribeflowai.desktop.config.v2';
 const LEGACY_STORAGE_KEYS = ['helpscribe.desktop.config.v2', 'helpscribe.desktop.config.v1'];
-const APP_VERSION = '0.1.46';
+const APP_VERSION = '0.1.47';
 const CALL_COMPARISON_GROUPS_KEY = 'scribeflowai.callComparisonGroups.v1';
 const CALL_COMPARISON_SCRIPTS_KEY = 'scribeflowai.callComparisonScripts.v1';
 const HISTORY_FILE_NAME = 'conversations.jsonl';
@@ -273,6 +273,7 @@ const el = {
   callGroupList: document.getElementById('callGroupList'),
   callGroupScriptSelect: document.getElementById('callGroupScriptSelect'),
   callGroupAssociationStatus: document.getElementById('callGroupAssociationStatus'),
+  callGroupSourceLabel: document.getElementById('callGroupSourceLabel'),
   callGroupName: document.getElementById('callGroupName'),
   saveCallGroupBtn: document.getElementById('saveCallGroupBtn'),
   deleteCallGroupBtn: document.getElementById('deleteCallGroupBtn'),
@@ -2347,6 +2348,9 @@ function createEmptyCallGroup(name = 'Novo grupo de comparação') {
     id: callGroupId(),
     name,
     scriptId: '',
+    sourceType: '',
+    sourcePath: '',
+    sourceLoadedAt: '',
     calls: [],
     summary: '',
     createdAt: new Date().toISOString(),
@@ -2371,6 +2375,9 @@ function normalizeCallComparisonGroups(groups) {
     id: group.id || callGroupId(),
     name: group.name || 'Grupo sem nome',
     scriptId: group.scriptId || '',
+    sourceType: group.sourceType || '',
+    sourcePath: group.sourcePath || '',
+    sourceLoadedAt: group.sourceLoadedAt || '',
     calls: Array.isArray(group.calls) ? group.calls : [],
     summary: group.summary || '',
     createdAt: group.createdAt || new Date().toISOString(),
@@ -2490,7 +2497,7 @@ function renderCallGroupList() {
     row.className = `call-analysis-item${group.id === state.selectedCallGroupId ? ' selected' : ''}${script ? ' associated' : ''}`;
     row.innerHTML = `
       <span class="call-analysis-file">${escapeHtml(group.name)}</span>
-      <span class="call-analysis-status">${group.calls?.length || 0} ligações${script ? ` • Script: ${escapeHtml(script.name)}` : ' • Sem script'}</span>
+      <span class="call-analysis-status">${group.calls?.length || 0} ligações${script ? ` • Script: ${escapeHtml(script.name)}` : ' • Sem script'}${group.sourcePath ? ` • ${escapeHtml(sourceSummaryForGroup(group))}` : ''}</span>
     `;
     row.addEventListener('click', () => selectCallComparisonGroup(group.id));
     el.callGroupList.appendChild(row);
@@ -2500,6 +2507,47 @@ function renderCallGroupList() {
   syncCurrentCallGroupCalls();
   renderGroupScriptSelect();
   renderCallAnalysisList();
+}
+
+function sourceSummaryForGroup(group) {
+  if (!group?.sourcePath) return 'Sem pasta';
+  if (group.sourceType === 'folder') return `Pasta: ${shortPath(group.sourcePath)}`;
+  return group.sourcePath;
+}
+
+function shortPath(path) {
+  if (!path) return '';
+  const parts = String(path).split('/').filter(Boolean);
+  if (parts.length <= 3) return path;
+  return `.../${parts.slice(-3).join('/')}`;
+}
+
+function setCurrentCallGroupSource(sourceType, sourcePath) {
+  const group = currentCallComparisonGroup();
+  if (!group) return;
+  group.sourceType = sourceType;
+  group.sourcePath = sourcePath;
+  group.sourceLoadedAt = new Date().toISOString();
+  group.updatedAt = group.sourceLoadedAt;
+  persistCallComparisonGroups();
+  renderCallGroupSource();
+  renderCallGroupList();
+}
+
+function renderCallGroupSource() {
+  const group = currentCallComparisonGroup();
+  const hasFolder = group?.sourceType === 'folder' && group?.sourcePath;
+  if (el.callGroupSourceLabel) {
+    if (hasFolder) {
+      el.callGroupSourceLabel.textContent = `Pasta ativa: ${group.sourcePath}`;
+    } else if (group?.sourcePath) {
+      el.callGroupSourceLabel.textContent = `Origem ativa: ${group.sourcePath}`;
+    } else {
+      el.callGroupSourceLabel.textContent = 'Nenhuma pasta carregada neste grupo.';
+    }
+    el.callGroupSourceLabel.classList.toggle('active', Boolean(group?.sourcePath));
+  }
+  el.addCallAnalysisFolderBtn?.classList.toggle('source-active', Boolean(hasFolder));
 }
 
 function renderGroupScriptSelect() {
@@ -2516,6 +2564,7 @@ function renderGroupScriptSelect() {
   el.callGroupAssociationStatus.textContent = script ? `Associado: ${script.name}` : 'Sem script associado';
   el.callGroupAssociationStatus.classList.toggle('associated', Boolean(script));
   el.callGroupSummaryOutput.textContent = group?.summary || 'Nenhuma análise em lote ainda.';
+  renderCallGroupSource();
   renderCallResultsList();
 }
 
@@ -2704,8 +2753,14 @@ function renderSelectedCallAnalysis() {
 
 function upsertCallAnalysisFiles(filePaths) {
   const existing = new Set(state.callAnalyses.map((item) => item.filePath));
+  let added = 0;
+  let skipped = 0;
   filePaths
-    .filter((filePath) => isSupportedAudioFile(filePath) && !existing.has(filePath))
+    .filter((filePath) => {
+      const shouldAdd = isSupportedAudioFile(filePath) && !existing.has(filePath);
+      if (!shouldAdd) skipped += 1;
+      return shouldAdd;
+    })
     .forEach((filePath) => {
       const fileName = filePath.split('/').pop()?.split('\\').pop() || 'audio';
       state.callAnalyses.push({
@@ -2719,6 +2774,8 @@ function upsertCallAnalysisFiles(filePaths) {
         score: null,
         error: '',
       });
+      existing.add(filePath);
+      added += 1;
     });
 
   if (state.selectedCallAnalysis == null && state.callAnalyses.length) {
@@ -2726,6 +2783,7 @@ function upsertCallAnalysisFiles(filePaths) {
   }
   saveCurrentCallComparisonGroup({ silent: true });
   renderCallAnalysisList();
+  return { added, skipped };
 }
 
 function deleteCallAnalysisItem(itemId) {
@@ -2771,15 +2829,27 @@ async function addCallAnalysisFile() {
     filters: [{ name: 'Audio', extensions: ['mp3', 'wav', 'm4a', 'mp4', 'ogg', 'opus', 'webm'] }],
   });
   if (!selected) return;
-  upsertCallAnalysisFiles(Array.isArray(selected) ? selected : [selected]);
+  const files = Array.isArray(selected) ? selected : [selected];
+  setCurrentCallGroupSource('files', `${files.length} arquivo(s) selecionado(s) manualmente`);
+  const result = upsertCallAnalysisFiles(files);
+  log(`[calls] Arquivos carregados: ${result.added} novo(s), ${result.skipped} ignorado(s).`);
 }
 
 async function addCallAnalysisFolder() {
   const selected = await openDialog({ multiple: false, directory: true });
   if (!selected || typeof selected !== 'string') return;
-  const files = await collectAudioFilesFromDirectory(selected);
-  upsertCallAnalysisFiles(files);
-  log(`[calls] Pasta carregada: ${files.length} gravação(ões) encontrada(s).`);
+  try {
+    setCurrentCallGroupSource('folder', selected);
+    const files = await collectAudioFilesFromDirectory(selected);
+    const result = upsertCallAnalysisFiles(files);
+    if (!files.length) {
+      showNotice('Pasta salva no grupo, mas nenhuma gravação suportada foi encontrada.', 'error');
+    }
+    log(`[calls] Pasta ativa: ${selected}. ${files.length} gravação(ões) encontrada(s), ${result.added} nova(s), ${result.skipped} ignorada(s).`);
+  } catch (err) {
+    showNotice(`Falha ao carregar pasta: ${err.message}`, 'error');
+    log(`[error] Falha ao carregar pasta de ligações: ${err.message}`);
+  }
 }
 
 async function transcribeSelectedCallAnalysis() {
