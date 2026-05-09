@@ -478,7 +478,8 @@ async function handleCallComparisonsPull(env, userId) {
 
   const recordingRows = await env.DB.prepare(
     `SELECT id, group_id, file_name, file_path, status, is_transcribed, raw_transcript, speaker_transcript,
-            transcript_summary, analysis, comparison_summary, score, is_good, error, transcribed_at, analyzed_at,
+            transcript_summary, analysis, comparison_summary, sentiment_label, sentiment_summary, sentiment_people,
+            score, is_good, error, transcribed_at, analyzed_at,
             created_at, updated_at, deleted_at
      FROM call_recordings
      WHERE user_id = ?1 AND deleted_at IS NULL
@@ -579,9 +580,9 @@ async function handleCallComparisonsPush(env, userId, body) {
       await env.DB.prepare(
         `INSERT INTO call_recordings (
            id, user_id, group_id, file_name, file_path, status, is_transcribed, raw_transcript, speaker_transcript,
-           transcript_summary, analysis, comparison_summary, score, is_good, error, transcribed_at, analyzed_at,
-           created_at, updated_at, deleted_at
-         ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, NULL)
+           transcript_summary, analysis, comparison_summary, sentiment_label, sentiment_summary, sentiment_people,
+           score, is_good, error, transcribed_at, analyzed_at, created_at, updated_at, deleted_at
+         ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22, NULL)
          ON CONFLICT(id) DO UPDATE SET
            group_id = excluded.group_id,
            file_name = excluded.file_name,
@@ -593,6 +594,9 @@ async function handleCallComparisonsPush(env, userId, body) {
            transcript_summary = excluded.transcript_summary,
            analysis = excluded.analysis,
            comparison_summary = excluded.comparison_summary,
+           sentiment_label = excluded.sentiment_label,
+           sentiment_summary = excluded.sentiment_summary,
+           sentiment_people = excluded.sentiment_people,
            score = excluded.score,
            is_good = excluded.is_good,
            error = excluded.error,
@@ -613,6 +617,9 @@ async function handleCallComparisonsPush(env, userId, body) {
         trimString(call?.transcript_summary),
         trimString(call?.analysis),
         trimString(call?.comparison_summary),
+        trimString(call?.sentiment_label),
+        trimString(call?.sentiment_summary),
+        trimString(call?.sentiment_people),
         score,
         isGood,
         trimString(call?.error),

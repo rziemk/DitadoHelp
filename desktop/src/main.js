@@ -5,7 +5,7 @@ import { exists, mkdir, readDir, readFile, readTextFile, writeFile, writeTextFil
 
 const STORAGE_KEY = 'scribeflowai.desktop.config.v2';
 const LEGACY_STORAGE_KEYS = ['helpscribe.desktop.config.v2', 'helpscribe.desktop.config.v1'];
-const APP_VERSION = '0.1.49';
+const APP_VERSION = '0.1.50';
 const CALL_COMPARISON_GROUPS_KEY = 'scribeflowai.callComparisonGroups.v1';
 const CALL_COMPARISON_SCRIPTS_KEY = 'scribeflowai.callComparisonScripts.v1';
 const HISTORY_FILE_NAME = 'conversations.jsonl';
@@ -1459,6 +1459,9 @@ function serializeCallGroupForCloud(group) {
       transcript_summary: item.transcriptSummary || '',
       analysis: item.analysis || '',
       comparison_summary: item.comparisonSummary || '',
+      sentiment_label: item.sentimentLabel || '',
+      sentiment_summary: item.sentimentSummary || '',
+      sentiment_people: item.sentimentPeople || '',
       score: item.score,
       is_good: item.isGood,
       error: item.error || '',
@@ -2498,6 +2501,9 @@ function normalizeCallAnalysisItem(item) {
   const transcriptSummary = item?.transcriptSummary || item?.transcript_summary || '';
   const analysis = item?.analysis || '';
   const comparisonSummary = item?.comparisonSummary || item?.comparison_summary || '';
+  const sentimentLabel = item?.sentimentLabel || item?.sentiment_label || '';
+  const sentimentSummary = item?.sentimentSummary || item?.sentiment_summary || '';
+  const sentimentPeople = item?.sentimentPeople || item?.sentiment_people || '';
   const scoreValue = item?.score ?? null;
   const score = scoreValue === null || scoreValue === '' ? null : Number(scoreValue);
   const transcribedAt = item?.transcribedAt || item?.transcribed_at || '';
@@ -2512,6 +2518,9 @@ function normalizeCallAnalysisItem(item) {
     transcriptSummary,
     analysis,
     comparisonSummary,
+    sentimentLabel,
+    sentimentSummary,
+    sentimentPeople,
     score: Number.isFinite(score) ? Math.max(0, Math.min(100, score)) : null,
     isGood: typeof item?.isGood === 'boolean' ? item.isGood : typeof item?.is_good === 'boolean' ? item.is_good : Number.isFinite(score) ? score >= 70 : null,
     error: item?.error || '',
@@ -2896,6 +2905,7 @@ function renderCallAnalysisList() {
     <span>Transcrição</span>
     <span>Resumo</span>
     <span>Comparação</span>
+    <span>Sentimento</span>
     <span>Nota</span>
     <span>Ações</span>
   `;
@@ -2912,6 +2922,7 @@ function renderCallAnalysisList() {
       <span>${callStatusBadge(item)}</span>
       <span class="call-analysis-status">${escapeHtml(item.transcriptSummary || transcriptPreview(item))}</span>
       <span class="call-analysis-status">${escapeHtml(item.comparisonSummary || item.analysis || 'Ainda sem comparação.')}</span>
+      <span class="call-analysis-status">${escapeHtml(item.sentimentSummary || item.sentimentLabel || 'Sem sentimento.')}</span>
       <span>${scoreBadge(item)}</span>
       <button type="button" class="btn ghost small call-delete-btn">Excluir</button>
     `;
@@ -2965,7 +2976,7 @@ function renderSelectedCallAnalysis() {
     return;
   }
 
-  el.selectedCallStatus.textContent = `${item.status}${item.score != null ? ` • Nota ${item.score}` : ''}`;
+  el.selectedCallStatus.textContent = `${item.status}${item.score != null ? ` • Nota ${item.score}` : ''}${item.sentimentLabel ? ` • Sentimento ${item.sentimentLabel}` : ''}`;
   el.callTranscriptOutput.textContent = item.speakerTranscript || item.rawTranscript || 'Ainda sem transcrição.';
   el.callAnalysisOutput.textContent = item.analysis || 'A análise aparecerá aqui.';
 }
@@ -2992,6 +3003,9 @@ function upsertCallAnalysisFiles(filePaths) {
         transcriptSummary: '',
         analysis: '',
         comparisonSummary: '',
+        sentimentLabel: '',
+        sentimentSummary: '',
+        sentimentPeople: '',
         score: null,
         isGood: null,
         error: '',
@@ -3256,8 +3270,9 @@ async function runCallComparisonItem(item, script, group) {
     const prompt =
       'Compare o que deveria ter acontecido em uma ligação com o que realmente aconteceu.\n' +
       'Responda APENAS em JSON válido, sem markdown, no formato:\n' +
-      '{"resumo_ligacao":"...","resumo_comparacao":"...","pontos_cumpridos":["..."],"pontos_faltantes":["..."],"divergencias":["..."],"evidencias":["..."],"finalizacao":"concluida|interrompida|indefinida","nota":0,"resultado":"boa|ruim","analise_detalhada":"..."}\n' +
+      '{"resumo_ligacao":"...","resumo_comparacao":"...","sentimento_geral":"positivo|neutro|negativo|tenso|misto","resumo_sentimento":"...","sentimento_por_pessoa":[{"pessoa":"Pessoa A","sentimento":"...","evidencia":"..."},{"pessoa":"Pessoa B","sentimento":"...","evidencia":"..."}],"pontos_cumpridos":["..."],"pontos_faltantes":["..."],"divergencias":["..."],"evidencias":["..."],"finalizacao":"concluida|interrompida|indefinida","nota":0,"resultado":"boa|ruim","analise_detalhada":"..."}\n' +
       'A nota deve ser de 0 a 100. Considere boa somente nota >= 70.\n' +
+      'No sentimento, avalie clima geral e cada interlocutor: estresse, cordialidade, confusão, tensão, irritação, cooperação e mudança de tom.\n' +
       'Se a ligação não chegou ao fechamento, confirmação final ou desligou/interrompeu antes de concluir, marque isso em finalizacao e nos pontos faltantes.\n\n' +
       `Grupo de comparação: ${group?.name || 'Sem nome'}\n` +
       `Script de referência: ${script?.name || 'Sem nome'}\n\n` +
@@ -3267,6 +3282,9 @@ async function runCallComparisonItem(item, script, group) {
     const structured = parseCallComparisonResult(llmAnswer);
     item.transcriptSummary = structured.resumo_ligacao || item.transcriptSummary || '';
     item.comparisonSummary = structured.resumo_comparacao || '';
+    item.sentimentLabel = structured.sentimento_geral || '';
+    item.sentimentSummary = structured.resumo_sentimento || '';
+    item.sentimentPeople = formatSentimentPeople(structured.sentimento_por_pessoa);
     item.analysis = formatCallComparisonAnalysis(structured, llmAnswer);
     item.score = structured.nota ?? extractScore(item.analysis);
     item.isGood = item.score != null ? item.score >= 70 : structured.resultado === 'boa';
@@ -3309,6 +3327,15 @@ function parseCallComparisonResult(text = '') {
       pontos_faltantes: Array.isArray(parsed.pontos_faltantes) ? parsed.pontos_faltantes.map(trimString).filter(Boolean) : [],
       divergencias: Array.isArray(parsed.divergencias) ? parsed.divergencias.map(trimString).filter(Boolean) : [],
       evidencias: Array.isArray(parsed.evidencias) ? parsed.evidencias.map(trimString).filter(Boolean) : [],
+      sentimento_geral: trimString(parsed.sentimento_geral).toLowerCase(),
+      resumo_sentimento: trimString(parsed.resumo_sentimento),
+      sentimento_por_pessoa: Array.isArray(parsed.sentimento_por_pessoa)
+        ? parsed.sentimento_por_pessoa.map((item) => ({
+          pessoa: trimString(item?.pessoa),
+          sentimento: trimString(item?.sentimento),
+          evidencia: trimString(item?.evidencia),
+        })).filter((item) => item.pessoa || item.sentimento || item.evidencia)
+        : [],
       finalizacao: trimString(parsed.finalizacao) || 'indefinida',
       nota: Number.isFinite(nota) ? Math.max(0, Math.min(100, nota)) : null,
       resultado: trimString(parsed.resultado).toLowerCase(),
@@ -3322,6 +3349,9 @@ function parseCallComparisonResult(text = '') {
       pontos_faltantes: [],
       divergencias: [],
       evidencias: [],
+      sentimento_geral: '',
+      resumo_sentimento: '',
+      sentimento_por_pessoa: [],
       finalizacao: /deslig|interromp|cortad/i.test(text) ? 'interrompida' : 'indefinida',
       nota: extractScore(text),
       resultado: '',
@@ -3335,8 +3365,15 @@ function formatCallComparisonAnalysis(result, fallbackText = '') {
   const lines = [
     `Resumo da ligação: ${result.resumo_ligacao || 'Não informado.'}`,
     `Resumo da comparação: ${result.resumo_comparacao || 'Não informado.'}`,
+    `Sentimento geral: ${result.sentimento_geral || 'Não informado.'}`,
+    `Resumo do sentimento: ${result.resumo_sentimento || 'Não informado.'}`,
     `Nota: ${result.nota != null ? result.nota : 'sem nota'}${result.resultado ? ` (${result.resultado})` : ''}`,
     `Finalização: ${result.finalizacao || 'indefinida'}`,
+    '',
+    'Sentimento por interlocutor:',
+    ...(result.sentimento_por_pessoa?.length
+      ? result.sentimento_por_pessoa.map((item) => `- ${item.pessoa || 'Pessoa'}: ${item.sentimento || 'sem classificação'}${item.evidencia ? ` (${item.evidencia})` : ''}`)
+      : ['- Nenhum sentimento por pessoa informado.']),
     '',
     'Pontos cumpridos:',
     ...(result.pontos_cumpridos.length ? result.pontos_cumpridos.map((item) => `- ${item}`) : ['- Nenhum ponto cumprido informado.']),
@@ -3356,6 +3393,18 @@ function formatCallComparisonAnalysis(result, fallbackText = '') {
   return lines.join('\n');
 }
 
+function formatSentimentPeople(items = []) {
+  if (!Array.isArray(items) || !items.length) return '';
+  return items
+    .map((item) => {
+      const person = item.pessoa || 'Pessoa';
+      const sentiment = item.sentimento || 'sem classificação';
+      const evidence = item.evidencia ? `: ${item.evidencia}` : '';
+      return `${person} - ${sentiment}${evidence}`;
+    })
+    .join('\n');
+}
+
 function buildCallGroupSummary(group) {
   const analyzed = (group.calls || []).filter((item) => item.analysis);
   if (!analyzed.length) return 'Nenhuma ligação analisada ainda.';
@@ -3367,10 +3416,19 @@ function buildCallGroupSummary(group) {
   const bad = scored.filter((item) => Number(item.score) < 70).length;
   const worst = scored.slice().sort((a, b) => Number(a.score || 0) - Number(b.score || 0))[0];
   const best = scored.slice().sort((a, b) => Number(b.score || 0) - Number(a.score || 0))[0];
+  const sentimentCounts = analyzed.reduce((acc, item) => {
+    const label = item.sentimentLabel || 'sem sentimento';
+    acc.set(label, (acc.get(label) || 0) + 1);
+    return acc;
+  }, new Map());
+  const sentimentSummary = [...sentimentCounts.entries()]
+    .map(([label, count]) => `${label}: ${count}`)
+    .join(', ');
   return [
     `${group.calls?.length || 0} ligação(ões) no grupo. ${analyzed.length} analisada(s).`,
     avg != null ? `Nota média: ${avg}.` : 'Sem notas estruturadas extraídas.',
     scored.length ? `Boas: ${good}. Ruins: ${bad}.` : '',
+    sentimentSummary ? `Sentimento: ${sentimentSummary}.` : '',
     best ? `Melhor aderência: ${best.fileName} (${best.score}).` : '',
     worst ? `Pior aderência: ${worst.fileName} (${worst.score}).` : '',
   ].filter(Boolean).join(' ');
@@ -3392,7 +3450,7 @@ function renderCallResultsList() {
     row.className = 'call-result-item';
     row.innerHTML = `
       <strong>${escapeHtml(item.fileName)}</strong>
-      <span>${item.score != null ? `Nota ${item.score}` : 'Sem nota'} • ${item.score != null && item.score >= 70 ? 'Boa' : item.score != null ? 'Ruim' : 'Sem classificação'} • ${escapeHtml(item.status)}</span>
+      <span>${item.score != null ? `Nota ${item.score}` : 'Sem nota'} • ${item.score != null && item.score >= 70 ? 'Boa' : item.score != null ? 'Ruim' : 'Sem classificação'} • Sentimento: ${escapeHtml(item.sentimentLabel || 'sem sentimento')} • ${escapeHtml(item.status)}</span>
       <span>${escapeHtml(item.comparisonSummary || item.analysis || 'Sem resumo da comparação.')}</span>
     `;
     row.addEventListener('click', () => {

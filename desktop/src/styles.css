@@ -724,7 +724,7 @@ body {
 }
 .call-table-row {
   display: grid;
-  grid-template-columns: 28px minmax(210px, 1.2fr) 110px minmax(180px, 1fr) minmax(220px, 1.1fr) 92px 80px;
+  grid-template-columns: 28px minmax(190px, 1.1fr) 104px minmax(150px, .9fr) minmax(190px, 1fr) minmax(150px, .85fr) 92px 80px;
   gap: 8px;
   align-items: start;
   border-bottom: 1px solid #e5edf8;
