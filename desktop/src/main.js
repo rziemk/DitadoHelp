@@ -5,7 +5,7 @@ import { exists, mkdir, readDir, readFile, readTextFile, writeFile, writeTextFil
 
 const STORAGE_KEY = 'scribeflowai.desktop.config.v2';
 const LEGACY_STORAGE_KEYS = ['helpscribe.desktop.config.v2', 'helpscribe.desktop.config.v1'];
-const APP_VERSION = '0.1.45';
+const APP_VERSION = '0.1.46';
 const CALL_COMPARISON_GROUPS_KEY = 'scribeflowai.callComparisonGroups.v1';
 const CALL_COMPARISON_SCRIPTS_KEY = 'scribeflowai.callComparisonScripts.v1';
 const HISTORY_FILE_NAME = 'conversations.jsonl';
@@ -2157,10 +2157,7 @@ async function scanAutoImportDirectory() {
     return;
   }
   try {
-    const entries = await readDir(state.config.autoImportCallsDir);
-    const files = entries
-      .filter((entry) => entry?.isFile && typeof entry?.name === 'string')
-      .map((entry) => entry.path)
+    const files = (await collectAudioFilesFromDirectory(state.config.autoImportCallsDir))
       .filter((path) => isSupportedAudioFile(path))
       .filter((path) => !state.autoImportSeen.has(path));
 
@@ -2174,6 +2171,27 @@ async function scanAutoImportDirectory() {
   } catch (err) {
     log(`[error] Falha ao varrer pasta monitorada: ${err.message}`);
   }
+}
+
+async function collectAudioFilesFromDirectory(dirPath) {
+  const files = [];
+  const entries = await readDir(dirPath);
+  for (const entry of entries) {
+    if (!entry?.name) continue;
+    const childPath = await join(dirPath, entry.name);
+    if (entry.isDirectory) {
+      try {
+        files.push(...await collectAudioFilesFromDirectory(childPath));
+      } catch (err) {
+        log(`[calls] Ignorando subpasta sem acesso: ${childPath} (${err.message})`);
+      }
+      continue;
+    }
+    if (entry.isFile && isSupportedAudioFile(childPath)) {
+      files.push(childPath);
+    }
+  }
+  return files;
 }
 
 async function processAudioFilePath(filePath, fromAutomation = false) {
@@ -2759,12 +2777,9 @@ async function addCallAnalysisFile() {
 async function addCallAnalysisFolder() {
   const selected = await openDialog({ multiple: false, directory: true });
   if (!selected || typeof selected !== 'string') return;
-  const entries = await readDir(selected);
-  upsertCallAnalysisFiles(
-    entries
-      .filter((entry) => entry?.isFile && typeof entry?.path === 'string')
-      .map((entry) => entry.path),
-  );
+  const files = await collectAudioFilesFromDirectory(selected);
+  upsertCallAnalysisFiles(files);
+  log(`[calls] Pasta carregada: ${files.length} gravação(ões) encontrada(s).`);
 }
 
 async function transcribeSelectedCallAnalysis() {
