@@ -5,7 +5,7 @@ import { exists, mkdir, readDir, readFile, readTextFile, writeFile, writeTextFil
 
 const STORAGE_KEY = 'scribeflowai.desktop.config.v2';
 const LEGACY_STORAGE_KEYS = ['helpscribe.desktop.config.v2', 'helpscribe.desktop.config.v1'];
-const APP_VERSION = '0.1.48';
+const APP_VERSION = '0.1.49';
 const CALL_COMPARISON_GROUPS_KEY = 'scribeflowai.callComparisonGroups.v1';
 const CALL_COMPARISON_SCRIPTS_KEY = 'scribeflowai.callComparisonScripts.v1';
 const HISTORY_FILE_NAME = 'conversations.jsonl';
@@ -246,6 +246,10 @@ const el = {
   fileTranscriptPanel: document.getElementById('fileTranscriptPanel'),
   autoCallsPanel: document.getElementById('autoCallsPanel'),
   callAnalysisPanel: document.getElementById('callAnalysisPanel'),
+  callSubtabs: Array.from(document.querySelectorAll('.call-subtab')),
+  callManageView: document.getElementById('callManageView'),
+  callAnalyzeView: document.getElementById('callAnalyzeView'),
+  callResultsView: document.getElementById('callResultsView'),
   dockGrid: document.querySelector('.dock-grid'),
   loadAudioFileBtn: document.getElementById('loadAudioFileBtn'),
   toggleTranscriptHistoryBtn: document.getElementById('toggleTranscriptHistoryBtn'),
@@ -697,6 +701,10 @@ function wireEvents() {
     state.config.autoImportCallsEnabled = el.enableAutoImport.checked;
     persistConfig();
     restartAutoImportMonitor();
+  });
+
+  el.callSubtabs.forEach((btn) => {
+    btn.addEventListener('click', () => setCallAnalysisSubtab(btn.dataset.callTab || 'manage'));
   });
 
   el.newCallGroupBtn.addEventListener('click', () => createCallComparisonGroup());
@@ -2633,6 +2641,14 @@ function migrateLegacyGroupScripts() {
   }
 }
 
+function setCallAnalysisSubtab(tabName) {
+  const active = ['manage', 'analyze', 'results'].includes(tabName) ? tabName : 'manage';
+  el.callSubtabs.forEach((btn) => btn.classList.toggle('active', btn.dataset.callTab === active));
+  el.callManageView?.classList.toggle('active', active === 'manage');
+  el.callAnalyzeView?.classList.toggle('active', active === 'analyze');
+  el.callResultsView?.classList.toggle('active', active === 'results');
+}
+
 function renderCallScriptList() {
   el.callScriptList.innerHTML = '';
   el.callScriptCount.textContent = `${state.callComparisonScripts.length} ${state.callComparisonScripts.length === 1 ? 'script' : 'scripts'}`;
@@ -2740,6 +2756,7 @@ function selectCallComparisonGroup(groupId) {
   state.selectedCallAnalysisIds.clear();
   syncCurrentCallGroupCalls();
   renderCallGroupList();
+  setCallAnalysisSubtab('analyze');
 }
 
 function selectCallComparisonScript(scriptId) {
@@ -3214,6 +3231,7 @@ async function runCallComparisonForItems(items, script = scriptForCurrentGroup()
   renderCallAnalysisList();
   renderCallResultsList();
   renderGroupScriptSelect();
+  setCallAnalysisSubtab('results');
   if (isAuthenticated() && state.config.autoSyncCloud) {
     void syncCallComparisons();
   }

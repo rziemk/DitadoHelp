@@ -269,34 +269,46 @@
           </div>
 
           <div id="callAnalysisPanel" class="workflow-view hidden">
-            <div class="call-analysis-layout">
-              <aside class="call-analysis-list">
-                <div class="call-analysis-head">
-                  <strong>Scripts de comparação</strong>
-                  <span id="callScriptCount" class="muted">0 scripts</span>
-                </div>
-                <input id="callScriptName" class="field" placeholder="Nome do script. Ex: Itaú cobrança" />
-                <textarea id="callExpectedPrompt" class="call-expected-input compact" placeholder="Digite o script/regras que devem ser comparados com as ligações..."></textarea>
-                <div class="inline-actions">
-                  <button id="newCallScriptBtn" class="btn ghost small">Novo script</button>
-                  <button id="saveCallScriptBtn" class="btn secondary small">Salvar script</button>
-                  <button id="deleteCallScriptBtn" class="btn ghost small">Excluir script</button>
-                </div>
-                <div id="callScriptList" class="call-analysis-items compact-list"></div>
+            <div class="call-analysis-shell">
+              <div class="call-analysis-subtabs">
+                <button class="call-subtab active" data-call-tab="manage">Cadastros</button>
+                <button class="call-subtab" data-call-tab="analyze">Analisar grupo</button>
+                <button class="call-subtab" data-call-tab="results">Resultados</button>
+              </div>
 
-                <div class="call-analysis-head">
-                  <strong>Grupos de ligações</strong>
-                  <button id="newCallGroupBtn" class="btn secondary small">Novo grupo</button>
-                </div>
-                <input id="callGroupName" class="field" placeholder="Nome do grupo de ligações" />
-                <div class="inline-actions">
-                  <button id="saveCallGroupBtn" class="btn secondary small">Salvar grupo</button>
-                  <button id="deleteCallGroupBtn" class="btn ghost small">Excluir grupo</button>
-                </div>
-                <div id="callGroupList" class="call-analysis-items compact-list"></div>
-              </aside>
+              <section id="callManageView" class="call-subview active">
+                <div class="call-manager-grid">
+                  <div class="call-analysis-card call-manager-card">
+                    <div class="call-analysis-head">
+                      <strong>Scripts de comparação</strong>
+                      <span id="callScriptCount" class="muted">0 scripts</span>
+                    </div>
+                    <input id="callScriptName" class="field" placeholder="Nome do script. Ex: Itaú cobrança" />
+                    <textarea id="callExpectedPrompt" class="call-expected-input" placeholder="Digite o script/regras que devem ser comparados com as ligações..."></textarea>
+                    <div class="inline-actions">
+                      <button id="newCallScriptBtn" class="btn ghost small">Novo script</button>
+                      <button id="saveCallScriptBtn" class="btn secondary small">Salvar script</button>
+                      <button id="deleteCallScriptBtn" class="btn ghost small">Excluir script</button>
+                    </div>
+                    <div id="callScriptList" class="call-analysis-items compact-list manager-list"></div>
+                  </div>
 
-              <section class="call-analysis-workspace">
+                  <div class="call-analysis-card call-manager-card">
+                    <div class="call-analysis-head">
+                      <strong>Grupos de ligações</strong>
+                      <button id="newCallGroupBtn" class="btn secondary small">Novo grupo</button>
+                    </div>
+                    <input id="callGroupName" class="field" placeholder="Nome do grupo de ligações" />
+                    <div class="inline-actions">
+                      <button id="saveCallGroupBtn" class="btn secondary small">Salvar grupo</button>
+                      <button id="deleteCallGroupBtn" class="btn ghost small">Excluir grupo</button>
+                    </div>
+                    <div id="callGroupList" class="call-analysis-items compact-list manager-list"></div>
+                  </div>
+                </div>
+              </section>
+
+              <section id="callAnalyzeView" class="call-subview">
                 <div class="call-analysis-card">
                   <div class="call-analysis-head">
                     <strong>Grupo selecionado</strong>
@@ -306,15 +318,18 @@
                     <select id="callGroupScriptSelect" class="field"></select>
                     <span id="callGroupAssociationStatus" class="association-chip">Sem script associado</span>
                   </div>
-                <div class="call-analysis-head">
-                  <strong>Ligações do grupo</strong>
-                  <span id="callAnalysisCount" class="muted">0 itens</span>
                 </div>
-                <div class="inline-actions">
-                  <button id="addCallAnalysisFileBtn" class="btn secondary small">Carregar ligações</button>
-                  <button id="addCallAnalysisFolderBtn" class="btn ghost small">Carregar pasta</button>
-                  <button id="selectAllCallAnalysesBtn" class="btn ghost small">Selecionar todas</button>
-                  <button id="deleteSelectedCallAnalysesBtn" class="btn ghost small">Excluir selecionadas</button>
+
+                <div class="call-analysis-card">
+                  <div class="call-analysis-head">
+                    <strong>Ligações do grupo</strong>
+                    <span id="callAnalysisCount" class="muted">0 itens</span>
+                  </div>
+                  <div class="inline-actions">
+                    <button id="addCallAnalysisFileBtn" class="btn secondary small">Carregar ligações</button>
+                    <button id="addCallAnalysisFolderBtn" class="btn ghost small">Carregar pasta</button>
+                    <button id="selectAllCallAnalysesBtn" class="btn ghost small">Selecionar todas</button>
+                    <button id="deleteSelectedCallAnalysesBtn" class="btn ghost small">Excluir selecionadas</button>
                     <button id="transcribeSelectedCallBtn" class="btn ghost small">Transcrever selecionadas</button>
                     <button id="transcribeAllCallsBtn" class="btn ghost small">Transcrever todas</button>
                   </div>
@@ -322,22 +337,24 @@
                   <div id="callAnalysisList" class="call-analysis-items call-files-list"></div>
                 </div>
 
-                <div class="call-analysis-output-grid">
-                  <div class="call-analysis-card">
-                    <div class="call-analysis-head">
-                      <strong>Transcrição por interlocutor</strong>
-                      <span id="selectedCallStatus" class="muted">Nenhuma ligação selecionada</span>
-                    </div>
-                    <pre id="callTranscriptOutput" class="call-analysis-output">A transcrição aparecerá aqui.</pre>
+                <div class="call-analysis-card">
+                  <div class="call-analysis-head">
+                    <strong>Transcrição por interlocutor</strong>
+                    <span id="selectedCallStatus" class="muted">Nenhuma ligação selecionada</span>
                   </div>
-                  <div class="call-analysis-card">
-                    <div class="call-analysis-head">
-                      <strong>Esperado vs realizado</strong>
-                      <button id="copyCallAnalysisBtn" class="btn ghost small">Copiar análise</button>
-                    </div>
-                    <pre id="callAnalysisOutput" class="call-analysis-output">A análise aparecerá aqui.</pre>
-                  </div>
+                  <pre id="callTranscriptOutput" class="call-analysis-output tall">A transcrição aparecerá aqui.</pre>
                 </div>
+
+                <div class="call-analysis-card">
+                  <div class="call-analysis-head">
+                    <strong>Esperado vs realizado</strong>
+                    <button id="copyCallAnalysisBtn" class="btn ghost small">Copiar análise</button>
+                  </div>
+                  <pre id="callAnalysisOutput" class="call-analysis-output tall">A análise aparecerá aqui.</pre>
+                </div>
+              </section>
+
+              <section id="callResultsView" class="call-subview">
                 <div class="call-analysis-card">
                   <div class="call-analysis-head">
                     <strong>Resultados do grupo</strong>
