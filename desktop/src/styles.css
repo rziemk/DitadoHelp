@@ -145,6 +145,31 @@ body {
 .auth-mode-title { font-size: 14px; font-weight: 800; color: #1e293b; margin-top: 8px; }
 .field-hint { font-size: 12px; color: var(--muted); margin-top: 6px; line-height: 1.35; }
 .inline-actions { display: flex; gap: 8px; margin-top: 8px; flex-wrap: wrap; }
+.inline-field-row { display: flex; align-items: center; gap: 8px; margin-top: 6px; }
+.inline-field-row .inline-label { flex-shrink: 0; font-size: 12px; font-weight: 700; color: var(--muted); }
+
+/* Group list badges */
+.group-badges { display: flex; gap: 6px; align-items: center; flex-wrap: wrap; margin-top: 3px; }
+.group-script-badge {
+  display: inline-flex; align-items: center; gap: 3px;
+  font-size: 11px; font-weight: 600;
+  background: #eff6ff; color: #1d4ed8; border: 1px solid #bfdbfe;
+  border-radius: 8px; padding: 1px 7px;
+  white-space: nowrap;
+}
+.group-script-badge.unset {
+  background: #f8fafc; color: #94a3b8; border-color: #e2e8f0;
+}
+.group-path-badge {
+  display: inline-flex; align-items: center; gap: 3px;
+  font-size: 11px; color: #475569;
+  background: #f8fafc; border: 1px solid #e2e8f0;
+  border-radius: 8px; padding: 1px 7px;
+  white-space: nowrap; max-width: 180px; overflow: hidden; text-overflow: ellipsis;
+}
+.group-count {
+  font-size: 11px; color: var(--muted); margin-left: 2px;
+}
 .key-row { display: grid; grid-template-columns: 1fr auto; gap: 6px; }
 .switches { display: grid; gap: 6px; margin-top: 4px; font-size: 13px; }
 .popover-footer { margin-top: 10px; display: flex; align-items: center; gap: 8px; }
@@ -756,7 +781,7 @@ body {
 }
 .call-table-row {
   display: grid;
-  grid-template-columns: 28px minmax(190px, 1.1fr) 104px minmax(150px, .9fr) minmax(190px, 1fr) minmax(150px, .85fr) 92px 80px;
+  grid-template-columns: 28px minmax(120px, .7fr) 104px minmax(130px, .8fr) minmax(160px, .9fr) minmax(120px, .75fr) 100px 80px 92px 108px;
   gap: 8px;
   align-items: start;
   border-bottom: 1px solid #e5edf8;
@@ -780,6 +805,12 @@ body {
   border-radius: 0;
   background: #fff;
   cursor: pointer;
+}
+.call-row-actions {
+  display: flex;
+  gap: 4px;
+  flex-wrap: nowrap;
+  align-items: center;
 }
 .call-table-row.call-analysis-item.selected {
   background: #eef5ff;

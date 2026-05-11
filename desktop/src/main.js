@@ -5,7 +5,7 @@ import { exists, mkdir, readDir, readFile, readTextFile, writeFile, writeTextFil
 
 const STORAGE_KEY = 'scribeflowai.desktop.config.v2';
 const LEGACY_STORAGE_KEYS = ['helpscribe.desktop.config.v2', 'helpscribe.desktop.config.v1'];
-const APP_VERSION = '0.1.62';
+const APP_VERSION = '0.1.67';
 const CALL_COMPARISON_GROUPS_KEY = 'scribeflowai.callComparisonGroups.v1';
 const CALL_COMPARISON_SCRIPTS_KEY = 'scribeflowai.callComparisonScripts.v1';
 const HISTORY_FILE_NAME = 'conversations.jsonl';
@@ -278,6 +278,7 @@ const el = {
   callGroupList: document.getElementById('callGroupList'),
   callGroupScriptSelect: document.getElementById('callGroupScriptSelect'),
   callGroupAssociationStatus: document.getElementById('callGroupAssociationStatus'),
+  callGroupScriptInline: document.getElementById('callGroupScriptInline'),
   callGroupSourceLabel: document.getElementById('callGroupSourceLabel'),
   callGroupName: document.getElementById('callGroupName'),
   saveCallGroupBtn: document.getElementById('saveCallGroupBtn'),
@@ -714,6 +715,10 @@ function wireEvents() {
   el.newCallGroupBtn.addEventListener('click', () => createCallComparisonGroup());
   el.saveCallGroupBtn.addEventListener('click', () => saveCurrentCallComparisonGroup());
   el.deleteCallGroupBtn.addEventListener('click', () => deleteCurrentCallComparisonGroup());
+  el.callGroupScriptInline?.addEventListener('change', () => {
+    associateCurrentGroupToScript(el.callGroupScriptInline.value);
+    renderCallGroupList();
+  });
   el.newCallScriptBtn.addEventListener('click', () => createNewCallScriptDraft());
   el.saveCallScriptBtn.addEventListener('click', () => saveCurrentCallScript());
   el.deleteCallScriptBtn.addEventListener('click', () => deleteCurrentCallScript());
@@ -2695,9 +2700,13 @@ function renderCallGroupList() {
     const row = document.createElement('button');
     row.type = 'button';
     row.className = `call-analysis-item${group.id === state.selectedCallGroupId ? ' selected' : ''}${script ? ' associated' : ''}`;
+    const scriptBadge = script
+      ? `<span class="group-script-badge">📋 ${escapeHtml(script.name)}</span>`
+      : `<span class="group-script-badge unset">Sem script</span>`;
+    const pathBadge = group.sourcePath ? `<span class="group-path-badge">📁 ${escapeHtml(sourceSummaryForGroup(group))}</span>` : '';
     row.innerHTML = `
       <span class="call-analysis-file">${escapeHtml(group.name)}</span>
-      <span class="call-analysis-status">${group.calls?.length || 0} ligações${script ? ` • Script: ${escapeHtml(script.name)}` : ' • Sem script'}${group.sourcePath ? ` • ${escapeHtml(sourceSummaryForGroup(group))}` : ''}</span>
+      <span class="group-badges">${scriptBadge}${pathBadge}<span class="group-count">${group.calls?.length || 0} lig.</span></span>
     `;
     row.addEventListener('click', () => selectCallComparisonGroup(group.id));
     el.callGroupList.appendChild(row);
@@ -2751,15 +2760,14 @@ function renderCallGroupSource() {
 }
 
 function renderGroupScriptSelect() {
-  el.callGroupScriptSelect.innerHTML = '<option value="">Associar script ao grupo...</option>';
-  state.callComparisonScripts.forEach((script) => {
-    const option = document.createElement('option');
-    option.value = script.id;
-    option.textContent = script.name;
-    el.callGroupScriptSelect.appendChild(option);
-  });
+  const opts = '<option value="">Associar script ao grupo...</option>' +
+    state.callComparisonScripts.map((s) => `<option value="${escapeHtml(s.id)}">${escapeHtml(s.name)}</option>`).join('');
+  el.callGroupScriptSelect.innerHTML = opts;
+  if (el.callGroupScriptInline) el.callGroupScriptInline.innerHTML = '<option value="">Selecionar script...</option>' +
+    state.callComparisonScripts.map((s) => `<option value="${escapeHtml(s.id)}">${escapeHtml(s.name)}</option>`).join('');
   const group = currentCallComparisonGroup();
   el.callGroupScriptSelect.value = group?.scriptId || '';
+  if (el.callGroupScriptInline) el.callGroupScriptInline.value = group?.scriptId || '';
   const script = scriptForCurrentGroup();
   el.callGroupAssociationStatus.textContent = script ? `Associado: ${script.name}` : 'Sem script associado';
   el.callGroupAssociationStatus.classList.toggle('associated', Boolean(script));
@@ -2795,15 +2803,18 @@ function createNewCallScriptDraft() {
 
 function createCallComparisonGroup() {
   saveCurrentCallComparisonGroup({ silent: true });
-  const name = window.prompt('Nome do grupo de ligações:', 'Novo grupo de ligações');
-  if (!name) return;
-  const group = createEmptyCallGroup(name.trim());
+  const inputName = el.callGroupName.value.trim();
+  const name = inputName || 'Novo grupo de ligações';
+  const group = createEmptyCallGroup(name);
   state.callComparisonGroups.unshift(group);
   state.selectedCallGroupId = group.id;
   state.selectedCallAnalysis = null;
   state.selectedCallAnalysisIds.clear();
+  el.callGroupName.value = group.name;
   persistCallComparisonGroups();
   renderCallGroupList();
+  el.callGroupName.focus();
+  el.callGroupName.select();
   log(`[calls] Grupo criado: ${group.name}.`);
 }
 
