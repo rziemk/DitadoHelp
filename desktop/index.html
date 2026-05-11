@@ -20,6 +20,11 @@
           <div class="top-wave-wrap" aria-label="Indicador de gravação">
             <canvas id="wave" height="32"></canvas>
           </div>
+          <label class="inline-label topbar-label">Traduzir para:</label>
+          <select id="translationLangTop" class="field compact"></select>
+          <span id="assistMode" class="assist-mode-inline">Modo: Ditar</span>
+          <span id="assistHint" class="assist-hint-inline">F8/F9/F10/F11/F12</span>
+          <span id="assistState" class="assist-state-inline">Aguardando próximo ditado</span>
         </div>
 
         <div class="top-actions">
@@ -164,14 +169,6 @@
           <button id="btnCallAnalysisMode" class="btn ghost">Análise de ligações</button>
           <button id="btnBackToMain" class="btn ghost hidden">Voltar ao painel principal</button>
           <span id="recordingTag" class="recording-tag hidden">Gravando</span>
-        </div>
-
-        <div class="right-actions action-meta">
-          <label class="inline-label">Traduzir para:</label>
-          <select id="translationLangTop" class="field compact"></select>
-          <span id="assistMode" class="assist-mode-inline">Modo: Ditar</span>
-          <span id="assistHint" class="assist-hint-inline">F8/F9/F10/F11/F12</span>
-          <span id="assistState" class="assist-state-inline">Aguardando próximo ditado</span>
         </div>
       </section>
 
@@ -343,6 +340,7 @@
                       <strong>Transcrição por interlocutor</strong>
                       <span id="selectedCallStatus" class="muted">Nenhuma ligação selecionada</span>
                     </div>
+                    <audio id="callAudioPlayer" controls style="width:100%;margin-bottom:6px;display:none;"></audio>
                     <pre id="callTranscriptOutput" class="call-analysis-output tall">A transcrição aparecerá aqui.</pre>
                   </div>
 
@@ -360,8 +358,8 @@
                 <div class="call-analysis-card">
                   <div class="call-analysis-head">
                     <strong>Resultados do grupo</strong>
-                    <span id="callGroupSummaryOutput" class="muted">Nenhuma análise em lote ainda.</span>
                   </div>
+                  <div id="callGroupDashboard" class="call-group-dashboard"></div>
                   <div id="callResultsList" class="call-results-list"></div>
                 </div>
               </section>

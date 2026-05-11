@@ -5,7 +5,7 @@ import { exists, mkdir, readDir, readFile, readTextFile, writeFile, writeTextFil
 
 const STORAGE_KEY = 'scribeflowai.desktop.config.v2';
 const LEGACY_STORAGE_KEYS = ['helpscribe.desktop.config.v2', 'helpscribe.desktop.config.v1'];
-const APP_VERSION = '0.1.53';
+const APP_VERSION = '0.1.58';
 const CALL_COMPARISON_GROUPS_KEY = 'scribeflowai.callComparisonGroups.v1';
 const CALL_COMPARISON_SCRIPTS_KEY = 'scribeflowai.callComparisonScripts.v1';
 const HISTORY_FILE_NAME = 'conversations.jsonl';
@@ -294,10 +294,12 @@ const el = {
   runCallAnalysisBtn: document.getElementById('runCallAnalysisBtn'),
   copyCallAnalysisBtn: document.getElementById('copyCallAnalysisBtn'),
   selectedCallStatus: document.getElementById('selectedCallStatus'),
+  callAudioPlayer: document.getElementById('callAudioPlayer'),
   callTranscriptOutput: document.getElementById('callTranscriptOutput'),
   callAnalysisOutput: document.getElementById('callAnalysisOutput'),
   callResultsList: document.getElementById('callResultsList'),
   callGroupSummaryOutput: document.getElementById('callGroupSummaryOutput'),
+  callGroupDashboard: document.getElementById('callGroupDashboard'),
   historyList: document.getElementById('historyList'),
   historyUse: document.getElementById('historyUse'),
   historyCopy: document.getElementById('historyCopy'),
@@ -2753,7 +2755,8 @@ function renderGroupScriptSelect() {
   const script = scriptForCurrentGroup();
   el.callGroupAssociationStatus.textContent = script ? `Associado: ${script.name}` : 'Sem script associado';
   el.callGroupAssociationStatus.classList.toggle('associated', Boolean(script));
-  el.callGroupSummaryOutput.textContent = group?.summary || 'Nenhuma análise em lote ainda.';
+  el.callGroupSummaryOutput && (el.callGroupSummaryOutput.textContent = group?.summary || 'Nenhuma análise em lote ainda.');
+  renderCallGroupDashboard();
   renderCallGroupSource();
   renderCallResultsList();
 }
@@ -2924,16 +2927,30 @@ function renderCallAnalysisList() {
       <span class="call-analysis-status">${escapeHtml(item.comparisonSummary || item.analysis || 'Ainda sem comparação.')}</span>
       <span class="call-analysis-status">${escapeHtml(item.sentimentSummary || item.sentimentLabel || 'Sem sentimento.')}</span>
       <span>${scoreBadge(item)}</span>
-      <button type="button" class="btn ghost small call-delete-btn">Excluir</button>
+      <span class="call-row-actions">
+        <button type="button" class="btn ghost small call-play-btn" title="Ouvir gravação">▶</button>
+        <button type="button" class="btn ghost small call-delete-btn">Excluir</button>
+      </span>
     `;
     row.querySelector('.call-analysis-check input').addEventListener('change', (ev) => {
       if (ev.target.checked) state.selectedCallAnalysisIds.add(item.id);
       else state.selectedCallAnalysisIds.delete(item.id);
       renderCallAnalysisList();
     });
+    row.querySelector('.call-play-btn').addEventListener('click', async (ev) => {
+      ev.stopPropagation();
+      state.selectedCallAnalysis = index;
+      renderCallAnalysisList();
+      renderSelectedCallAnalysis();
+      await playCallAudio(item);
+    });
     row.querySelector('.call-delete-btn').addEventListener('click', (ev) => {
       ev.stopPropagation();
       deleteCallAnalysisItem(item.id);
+    });
+    row.addEventListener('dblclick', async (ev) => {
+      if (ev.target.closest('input,button')) return;
+      await playCallAudio(item);
     });
     row.addEventListener('click', (ev) => {
       if (ev.target.closest('input,button')) return;
@@ -2951,7 +2968,8 @@ function callStatusBadge(item) {
   const isTranscribed = Boolean(item.rawTranscript || item.speakerTranscript);
   const label = item.error ? 'Erro' : isTranscribed ? 'Transcrita' : 'Pendente';
   const klass = item.error ? 'bad' : isTranscribed ? 'good' : 'neutral';
-  return `<span class="mini-badge ${klass}">${label}</span>`;
+  const errorHint = item.error ? `<br><small class="call-error-hint" title="${escapeHtml(item.error)}">${escapeHtml(item.error.length > 60 ? item.error.slice(0, 60) + '…' : item.error)}</small>` : '';
+  return `<span class="mini-badge ${klass}">${label}</span>${errorHint}`;
 }
 
 function scoreBadge(item) {
@@ -2973,11 +2991,12 @@ function renderSelectedCallAnalysis() {
     el.selectedCallStatus.textContent = 'Nenhuma ligação selecionada';
     el.callTranscriptOutput.textContent = 'A transcrição aparecerá aqui.';
     el.callAnalysisOutput.textContent = 'A análise aparecerá aqui.';
+    if (el.callAudioPlayer) el.callAudioPlayer.style.display = 'none';
     return;
   }
 
-  el.selectedCallStatus.textContent = `${item.status}${item.score != null ? ` • Nota ${item.score}` : ''}${item.sentimentLabel ? ` • Sentimento ${item.sentimentLabel}` : ''}`;
-  el.callTranscriptOutput.textContent = item.speakerTranscript || item.rawTranscript || 'Ainda sem transcrição.';
+  el.selectedCallStatus.textContent = `${item.status}${item.score != null ? ` • Nota ${item.score}` : ''}${item.sentimentLabel ? ` • Sentimento ${item.sentimentLabel}` : ''}${item.error ? ` • Erro: ${item.error}` : ''}`;
+  el.callTranscriptOutput.textContent = item.speakerTranscript || item.rawTranscript || (item.error ? `Falha na transcrição:\n${item.error}` : 'Ainda sem transcrição.');
   el.callAnalysisOutput.textContent = item.analysis || 'A análise aparecerá aqui.';
 }
 
@@ -3093,7 +3112,7 @@ async function addCallAnalysisFolder() {
 }
 
 async function transcribeSelectedCallAnalysis() {
-  const items = selectedCallAnalysisItems().filter((item) => !item.rawTranscript);
+  const items = selectedCallAnalysisItems().filter((item) => !item.rawTranscript || item.error);
   if (!items.length) {
     const selected = selectedCallAnalysisItems();
     if (selected.length && scriptForCurrentGroup()) {
@@ -3113,7 +3132,7 @@ async function transcribeSelectedCallAnalysis() {
 }
 
 async function transcribeAllCallAnalyses() {
-  const pending = state.callAnalyses.filter((item) => !item.rawTranscript);
+  const pending = state.callAnalyses.filter((item) => !item.rawTranscript || item.error);
   if (!pending.length) {
     log('[calls] Nenhuma ligação pendente para transcrever.');
     return;
@@ -3143,6 +3162,9 @@ async function transcribeCallAnalysisItem(item) {
   state.abortController = new AbortController();
   item.status = 'Transcrevendo';
   item.error = '';
+  item.rawTranscript = '';
+  item.speakerTranscript = '';
+  item.transcriptSummary = '';
   el.assistState.textContent = strings.processing;
   renderCallAnalysisList();
   refreshControls();
@@ -3160,6 +3182,10 @@ async function transcribeCallAnalysisItem(item) {
       webm: 'audio/webm',
     };
     const blob = new Blob([bytes], { type: mimeTypeByExt[fileExt] || 'audio/mpeg' });
+    const MAX_STT_BYTES = 25 * 1024 * 1024; // 25 MB — limite da API Whisper/OpenAI
+    if (blob.size > MAX_STT_BYTES) {
+      throw new Error(`Arquivo muito grande (${(blob.size / 1024 / 1024).toFixed(1)} MB). O limite da API é 25 MB. Comprima o áudio ou corte em partes menores.`);
+    }
     state.recordingExt = fileExt;
     item.rawTranscript = await transcribe(blob, state.abortController.signal);
     if (!item.rawTranscript) throw new Error('Transcrição vazia para a ligação.');
@@ -3342,9 +3368,10 @@ function parseCallComparisonResult(text = '') {
       analise_detalhada: trimString(parsed.analise_detalhada),
     };
   } catch {
+    const firstMeaningfulLine = text.split('\n').find((line) => line.trim() && !line.trim().startsWith('{') && !line.trim().startsWith('[')) || '';
     return {
       resumo_ligacao: '',
-      resumo_comparacao: text.split('\n').find((line) => line.trim()) || '',
+      resumo_comparacao: firstMeaningfulLine,
       pontos_cumpridos: [],
       pontos_faltantes: [],
       divergencias: [],
@@ -3355,7 +3382,7 @@ function parseCallComparisonResult(text = '') {
       finalizacao: /deslig|interromp|cortad/i.test(text) ? 'interrompida' : 'indefinida',
       nota: extractScore(text),
       resultado: '',
-      analise_detalhada: text,
+      analise_detalhada: '',
     };
   }
 }
@@ -3434,7 +3461,114 @@ function buildCallGroupSummary(group) {
   ].filter(Boolean).join(' ');
 }
 
+let _currentAudioUrl = null;
+
+async function playCallAudio(item) {
+  try {
+    if (el.callAudioPlayer.dataset.filePath === item.filePath && !el.callAudioPlayer.paused) {
+      el.callAudioPlayer.pause();
+      return;
+    }
+    if (_currentAudioUrl) {
+      URL.revokeObjectURL(_currentAudioUrl);
+      _currentAudioUrl = null;
+    }
+    const fileExt = item.fileName.includes('.') ? item.fileName.split('.').pop().toLowerCase() : 'mp3';
+    const mimeTypeByExt = { mp3: 'audio/mpeg', wav: 'audio/wav', m4a: 'audio/mp4', mp4: 'audio/mp4', ogg: 'audio/ogg', opus: 'audio/ogg', webm: 'audio/webm' };
+    const bytes = await readFile(item.filePath);
+    const blob = new Blob([bytes], { type: mimeTypeByExt[fileExt] || 'audio/mpeg' });
+    _currentAudioUrl = URL.createObjectURL(blob);
+    el.callAudioPlayer.src = _currentAudioUrl;
+    el.callAudioPlayer.dataset.filePath = item.filePath;
+    el.callAudioPlayer.style.display = 'block';
+    el.callAudioPlayer.play();
+  } catch (err) {
+    log(`[error] Falha ao reproduzir áudio: ${err.message}`);
+  }
+}
+
+function renderCallGroupDashboard() {
+  const dash = el.callGroupDashboard;
+  if (!dash) return;
+  const group = currentCallComparisonGroup();
+  const calls = group?.calls || [];
+  const total = calls.length;
+  const analyzed = calls.filter((c) => c.analysis || c.score != null);
+  const scored = analyzed.filter((c) => c.score != null);
+  const good = scored.filter((c) => Number(c.score) >= 70);
+  const bad = scored.filter((c) => Number(c.score) < 70);
+  const avg = scored.length ? Math.round(scored.reduce((s, c) => s + Number(c.score), 0) / scored.length) : null;
+  const best = scored.length ? scored.reduce((a, b) => Number(a.score) >= Number(b.score) ? a : b) : null;
+  const worst = scored.length ? scored.reduce((a, b) => Number(a.score) <= Number(b.score) ? a : b) : null;
+
+  const sentimentMap = new Map();
+  analyzed.forEach((c) => {
+    const s = c.sentimentLabel || 'indefinido';
+    sentimentMap.set(s, (sentimentMap.get(s) || 0) + 1);
+  });
+  const sentimentRows = [...sentimentMap.entries()]
+    .sort((a, b) => b[1] - a[1])
+    .map(([label, count]) => `<span class="dash-sentiment-chip">${escapeHtml(label)}: <strong>${count}</strong></span>`)
+    .join('');
+
+  const pendingCount = calls.filter((c) => !c.rawTranscript && !c.error).length;
+  const errorCount = calls.filter((c) => c.error).length;
+  const transcribedCount = calls.filter((c) => c.rawTranscript || c.speakerTranscript).length;
+
+  if (!total) {
+    dash.innerHTML = '<p class="muted" style="padding:8px 0">Nenhuma ligação carregada ainda.</p>';
+    return;
+  }
+
+  const avgColor = avg == null ? 'neutral' : avg >= 70 ? 'good' : avg >= 50 ? 'warn' : 'bad';
+
+  dash.innerHTML = `
+    <div class="dash-kpis">
+      <div class="dash-kpi">
+        <span class="dash-kpi-value">${total}</span>
+        <span class="dash-kpi-label">Total de ligações</span>
+      </div>
+      <div class="dash-kpi">
+        <span class="dash-kpi-value">${transcribedCount}</span>
+        <span class="dash-kpi-label">Transcritas</span>
+      </div>
+      <div class="dash-kpi">
+        <span class="dash-kpi-value">${analyzed.length}</span>
+        <span class="dash-kpi-label">Analisadas</span>
+      </div>
+      <div class="dash-kpi ${avgColor}">
+        <span class="dash-kpi-value">${avg != null ? avg : '—'}</span>
+        <span class="dash-kpi-label">Nota média</span>
+      </div>
+      <div class="dash-kpi good">
+        <span class="dash-kpi-value">${good.length}</span>
+        <span class="dash-kpi-label">Boas (≥ 70)</span>
+      </div>
+      <div class="dash-kpi bad">
+        <span class="dash-kpi-value">${bad.length}</span>
+        <span class="dash-kpi-label">Ruins (< 70)</span>
+      </div>
+      ${pendingCount ? `<div class="dash-kpi neutral"><span class="dash-kpi-value">${pendingCount}</span><span class="dash-kpi-label">Pendentes</span></div>` : ''}
+      ${errorCount ? `<div class="dash-kpi bad"><span class="dash-kpi-value">${errorCount}</span><span class="dash-kpi-label">Com erro</span></div>` : ''}
+    </div>
+    ${scored.length ? `
+    <div class="dash-highlights">
+      ${best ? `<div class="dash-highlight good">🏆 Melhor: <strong>${escapeHtml(best.fileName)}</strong> — Nota ${best.score}</div>` : ''}
+      ${worst && worst.id !== best?.id ? `<div class="dash-highlight bad">⚠️ Pior: <strong>${escapeHtml(worst.fileName)}</strong> — Nota ${worst.score}</div>` : ''}
+    </div>` : ''}
+    ${sentimentRows ? `<div class="dash-sentiments">${sentimentRows}</div>` : ''}
+  `;
+}
+
+function safeResultPreview(item) {
+  const looksLikeRawJson = (s) => !s || /^\s*[{[]/.test(s.trim());
+  const summary = looksLikeRawJson(item.comparisonSummary) ? '' : item.comparisonSummary;
+  const transcript = looksLikeRawJson(item.transcriptSummary) ? '' : item.transcriptSummary;
+  return summary || transcript || 'Clique para ver análise.';
+}
+
 function renderCallResultsList() {
+  renderCallGroupDashboard();
   if (!el.callResultsList) return;
   const group = currentCallComparisonGroup();
   const calls = group?.calls || [];
@@ -3451,7 +3585,7 @@ function renderCallResultsList() {
     row.innerHTML = `
       <strong>${escapeHtml(item.fileName)}</strong>
       <span>${item.score != null ? `Nota ${item.score}` : 'Sem nota'} • ${item.score != null && item.score >= 70 ? 'Boa' : item.score != null ? 'Ruim' : 'Sem classificação'} • Sentimento: ${escapeHtml(item.sentimentLabel || 'sem sentimento')} • ${escapeHtml(item.status)}</span>
-      <span>${escapeHtml(item.comparisonSummary || item.analysis || 'Sem resumo da comparação.')}</span>
+      <span>${escapeHtml(safeResultPreview(item))}</span>
     `;
     row.addEventListener('click', () => {
       const idx = state.callAnalyses.findIndex((call) => call.id === item.id);

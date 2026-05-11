@@ -213,6 +213,7 @@ body {
 .hidden { display: none !important; }
 .field.compact { min-width: 110px; height: 36px; }
 .inline-label { color: var(--muted); font-weight: 600; }
+.topbar-label { margin-left: 8px; }
 
 .btn {
   border: 1px solid var(--border);
@@ -853,6 +854,82 @@ body {
   background: #f0fdf4;
   color: #166534;
 }
+.call-group-dashboard {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  margin-bottom: 14px;
+}
+.dash-kpis {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+.dash-kpi {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: var(--soft);
+  padding: 12px 18px;
+  min-width: 90px;
+  flex: 1;
+}
+.dash-kpi.good { border-color: #86efac; background: #f0fdf4; }
+.dash-kpi.bad  { border-color: #fecaca; background: #fef2f2; }
+.dash-kpi.warn { border-color: #fde68a; background: #fffbeb; }
+.dash-kpi.neutral { border-color: #cfd9ea; background: #f8fafc; }
+.dash-kpi-value {
+  font-size: 28px;
+  font-weight: 900;
+  line-height: 1;
+  color: var(--fg);
+}
+.dash-kpi.good  .dash-kpi-value { color: #166534; }
+.dash-kpi.bad   .dash-kpi-value { color: #991b1b; }
+.dash-kpi.warn  .dash-kpi-value { color: #92400e; }
+.dash-kpi-label {
+  font-size: 11px;
+  font-weight: 700;
+  color: #64748b;
+  margin-top: 4px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  text-align: center;
+}
+.dash-highlights {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+}
+.dash-highlight {
+  border-radius: 8px;
+  padding: 7px 12px;
+  font-size: 12px;
+  border: 1px solid var(--border);
+  background: var(--soft);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.dash-highlight.good { border-color: #86efac; background: #f0fdf4; color: #166534; }
+.dash-highlight.bad  { border-color: #fecaca; background: #fef2f2; color: #991b1b; }
+.dash-sentiments {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+.dash-sentiment-chip {
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: #f8fafc;
+  color: #475569;
+  font-size: 12px;
+  padding: 4px 10px;
+}
+
 .call-results-list {
   display: grid;
   gap: 6px;
