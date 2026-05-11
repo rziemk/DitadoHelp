@@ -5,7 +5,7 @@ import { exists, mkdir, readDir, readFile, readTextFile, writeFile, writeTextFil
 
 const STORAGE_KEY = 'scribeflowai.desktop.config.v2';
 const LEGACY_STORAGE_KEYS = ['helpscribe.desktop.config.v2', 'helpscribe.desktop.config.v1'];
-const APP_VERSION = '0.1.58';
+const APP_VERSION = '0.1.61';
 const CALL_COMPARISON_GROUPS_KEY = 'scribeflowai.callComparisonGroups.v1';
 const CALL_COMPARISON_SCRIPTS_KEY = 'scribeflowai.callComparisonScripts.v1';
 const HISTORY_FILE_NAME = 'conversations.jsonl';
@@ -1467,6 +1467,8 @@ function serializeCallGroupForCloud(group) {
       score: item.score,
       is_good: item.isGood,
       error: item.error || '',
+      call_motive: item.callMotive || '',
+      call_direction: item.callDirection || '',
       transcribed_at: item.transcribedAt || '',
       analyzed_at: item.analyzedAt || '',
       created_at: item.createdAt || new Date().toISOString(),
@@ -2526,6 +2528,8 @@ function normalizeCallAnalysisItem(item) {
     score: Number.isFinite(score) ? Math.max(0, Math.min(100, score)) : null,
     isGood: typeof item?.isGood === 'boolean' ? item.isGood : typeof item?.is_good === 'boolean' ? item.is_good : Number.isFinite(score) ? score >= 70 : null,
     error: item?.error || '',
+    callMotive: item?.callMotive || item?.call_motive || '',
+    callDirection: item?.callDirection || item?.call_direction || '',
     transcribedAt,
     analyzedAt,
     createdAt: item?.createdAt || item?.created_at || new Date().toISOString(),
@@ -2909,14 +2913,17 @@ function renderCallAnalysisList() {
     <span>Resumo</span>
     <span>Comparação</span>
     <span>Sentimento</span>
+    <span>Motivo</span>
+    <span>Direção</span>
     <span>Nota</span>
     <span>Ações</span>
   `;
   el.callAnalysisList.appendChild(header);
 
   state.callAnalyses.forEach((item, index) => {
+    const scoreClass = item.score == null ? '' : item.score >= 70 ? ' score-good' : item.score >= 50 ? ' score-warn' : ' score-bad';
     const row = document.createElement('div');
-    row.className = `call-analysis-item call-table-row${index === state.selectedCallAnalysis ? ' selected' : ''}${item.analysis ? ' analyzed' : ''}`;
+    row.className = `call-analysis-item call-table-row${index === state.selectedCallAnalysis ? ' selected' : ''}${item.analysis ? ' analyzed' : ''}${scoreClass}`;
     row.innerHTML = `
       <label class="call-analysis-check table-check">
         <input type="checkbox" ${state.selectedCallAnalysisIds.has(item.id) ? 'checked' : ''} />
@@ -2926,6 +2933,8 @@ function renderCallAnalysisList() {
       <span class="call-analysis-status">${escapeHtml(item.transcriptSummary || transcriptPreview(item))}</span>
       <span class="call-analysis-status">${escapeHtml(item.comparisonSummary || item.analysis || 'Ainda sem comparação.')}</span>
       <span class="call-analysis-status">${escapeHtml(item.sentimentSummary || item.sentimentLabel || 'Sem sentimento.')}</span>
+      <span>${item.callMotive ? `<span class="call-motive-chip">${escapeHtml(item.callMotive)}</span>` : '<span class="muted">—</span>'}</span>
+      <span>${directionBadge(item.callDirection)}</span>
       <span>${scoreBadge(item)}</span>
       <span class="call-row-actions">
         <button type="button" class="btn ghost small call-play-btn" title="Ouvir gravação">▶</button>
@@ -2977,6 +2986,13 @@ function scoreBadge(item) {
   const klass = item.score >= 70 ? 'good' : 'bad';
   const label = item.score >= 70 ? 'Boa' : 'Ruim';
   return `<span class="mini-badge ${klass}">${item.score} • ${label}</span>`;
+}
+
+function directionBadge(dir) {
+  if (!dir) return '<span class="muted">—</span>';
+  const klass = dir === 'ativa' ? 'dir-ativa' : 'dir-receptiva';
+  const label = dir === 'ativa' ? '↑ Ativa' : '↓ Receptiva';
+  return `<span class="dir-badge ${klass}">${label}</span>`;
 }
 
 function transcriptPreview(item) {
@@ -3296,10 +3312,12 @@ async function runCallComparisonItem(item, script, group) {
     const prompt =
       'Compare o que deveria ter acontecido em uma ligação com o que realmente aconteceu.\n' +
       'Responda APENAS em JSON válido, sem markdown, no formato:\n' +
-      '{"resumo_ligacao":"...","resumo_comparacao":"...","sentimento_geral":"positivo|neutro|negativo|tenso|misto","resumo_sentimento":"...","sentimento_por_pessoa":[{"pessoa":"Pessoa A","sentimento":"...","evidencia":"..."},{"pessoa":"Pessoa B","sentimento":"...","evidencia":"..."}],"pontos_cumpridos":["..."],"pontos_faltantes":["..."],"divergencias":["..."],"evidencias":["..."],"finalizacao":"concluida|interrompida|indefinida","nota":0,"resultado":"boa|ruim","analise_detalhada":"..."}\n' +
+      '{"resumo_ligacao":"...","resumo_comparacao":"...","sentimento_geral":"positivo|neutro|negativo|tenso|misto","resumo_sentimento":"...","sentimento_por_pessoa":[{"pessoa":"Pessoa A","sentimento":"...","evidencia":"..."},{"pessoa":"Pessoa B","sentimento":"...","evidencia":"..."}],"pontos_cumpridos":["..."],"pontos_faltantes":["..."],"divergencias":["..."],"evidencias":["..."],"finalizacao":"concluida|interrompida|indefinida","nota":0,"resultado":"boa|ruim","analise_detalhada":"...","motivo":"...","direcao":"ativa|receptiva"}\n' +
       'A nota deve ser de 0 a 100. Considere boa somente nota >= 70.\n' +
       'No sentimento, avalie clima geral e cada interlocutor: estresse, cordialidade, confusão, tensão, irritação, cooperação e mudança de tom.\n' +
-      'Se a ligação não chegou ao fechamento, confirmação final ou desligou/interrompeu antes de concluir, marque isso em finalizacao e nos pontos faltantes.\n\n' +
+      'Se a ligação não chegou ao fechamento, confirmação final ou desligou/interrompeu antes de concluir, marque isso em finalizacao e nos pontos faltantes.\n' +
+      'Em "motivo", classifique o assunto principal da ligação em uma categoria curta (ex: Cobrança, Negociação, Vendas, Suporte, Informação, Reclamação, Encerramento de contrato, Agendamento, Outro).\n' +
+      'Em "direcao", infira se a ligação foi "ativa" (saímos para ligar) ou "receptiva" (nos ligaram). Use pistas como quem cumprimenta primeiro, quem apresenta o assunto, o contexto da empresa.\n\n' +
       `Grupo de comparação: ${group?.name || 'Sem nome'}\n` +
       `Script de referência: ${script?.name || 'Sem nome'}\n\n` +
       `Esperado:\n${script.body}\n\n` +
@@ -3314,6 +3332,8 @@ async function runCallComparisonItem(item, script, group) {
     item.analysis = formatCallComparisonAnalysis(structured, llmAnswer);
     item.score = structured.nota ?? extractScore(item.analysis);
     item.isGood = item.score != null ? item.score >= 70 : structured.resultado === 'boa';
+    item.callMotive = structured.motivo || '';
+    item.callDirection = structured.direcao || '';
     item.status = 'Analisada';
     item.analyzedAt = new Date().toISOString();
     item.updatedAt = item.analyzedAt;
@@ -3366,6 +3386,8 @@ function parseCallComparisonResult(text = '') {
       nota: Number.isFinite(nota) ? Math.max(0, Math.min(100, nota)) : null,
       resultado: trimString(parsed.resultado).toLowerCase(),
       analise_detalhada: trimString(parsed.analise_detalhada),
+      motivo: trimString(parsed.motivo),
+      direcao: trimString(parsed.direcao).toLowerCase(),
     };
   } catch {
     const firstMeaningfulLine = text.split('\n').find((line) => line.trim() && !line.trim().startsWith('{') && !line.trim().startsWith('[')) || '';
@@ -3383,6 +3405,8 @@ function parseCallComparisonResult(text = '') {
       nota: extractScore(text),
       resultado: '',
       analise_detalhada: '',
+      motivo: '',
+      direcao: '',
     };
   }
 }
@@ -3511,6 +3535,19 @@ function renderCallGroupDashboard() {
     .map(([label, count]) => `<span class="dash-sentiment-chip">${escapeHtml(label)}: <strong>${count}</strong></span>`)
     .join('');
 
+  const motiveMap = new Map();
+  calls.forEach((c) => {
+    if (!c.callMotive) return;
+    motiveMap.set(c.callMotive, (motiveMap.get(c.callMotive) || 0) + 1);
+  });
+  const motiveRows = [...motiveMap.entries()]
+    .sort((a, b) => b[1] - a[1])
+    .map(([label, count]) => `<span class="dash-sentiment-chip">${escapeHtml(label)}: <strong>${count}</strong></span>`)
+    .join('');
+
+  const ativaCount = calls.filter((c) => c.callDirection === 'ativa').length;
+  const receptivaCount = calls.filter((c) => c.callDirection === 'receptiva').length;
+
   const pendingCount = calls.filter((c) => !c.rawTranscript && !c.error).length;
   const errorCount = calls.filter((c) => c.error).length;
   const transcribedCount = calls.filter((c) => c.rawTranscript || c.speakerTranscript).length;
@@ -3556,7 +3593,9 @@ function renderCallGroupDashboard() {
       ${best ? `<div class="dash-highlight good">🏆 Melhor: <strong>${escapeHtml(best.fileName)}</strong> — Nota ${best.score}</div>` : ''}
       ${worst && worst.id !== best?.id ? `<div class="dash-highlight bad">⚠️ Pior: <strong>${escapeHtml(worst.fileName)}</strong> — Nota ${worst.score}</div>` : ''}
     </div>` : ''}
-    ${sentimentRows ? `<div class="dash-sentiments">${sentimentRows}</div>` : ''}
+    ${sentimentRows ? `<div class="dash-sentiments"><span class="dash-section-label">Sentimentos:</span> ${sentimentRows}</div>` : ''}
+    ${(ativaCount || receptivaCount) ? `<div class="dash-sentiments"><span class="dash-section-label">Direção:</span> ${ativaCount ? `<span class="dir-badge dir-ativa">↑ Ativa: <strong>${ativaCount}</strong></span>` : ''}${receptivaCount ? `<span class="dir-badge dir-receptiva">↓ Receptiva: <strong>${receptivaCount}</strong></span>` : ''}</div>` : ''}
+    ${motiveRows ? `<div class="dash-sentiments"><span class="dash-section-label">Motivos:</span> ${motiveRows}</div>` : ''}
   `;
 }
 
@@ -3578,14 +3617,34 @@ function renderCallResultsList() {
     el.callResultsList.textContent = 'Nenhum resultado gerado ainda.';
     return;
   }
+  // Group by callMotive
+  const motiveMap = new Map();
   analyzed.forEach((item) => {
+    const key = item.callMotive?.trim() || 'Sem motivo identificado';
+    if (!motiveMap.has(key)) motiveMap.set(key, []);
+    motiveMap.get(key).push(item);
+  });
+
+  motiveMap.forEach((items, motive) => {
+    const groupHeader = document.createElement('div');
+    groupHeader.className = 'call-result-group-header';
+    groupHeader.innerHTML = `<span class="call-motive-chip">${escapeHtml(motive)}</span><span class="muted">${items.length} ligação(ões)</span>`;
+    el.callResultsList.appendChild(groupHeader);
+
+    items.forEach((item) => {
+    const scoreClass = item.score == null ? '' : item.score >= 70 ? ' score-good' : item.score >= 50 ? ' score-warn' : ' score-bad';
     const row = document.createElement('button');
     row.type = 'button';
-    row.className = 'call-result-item';
+    row.className = `call-result-item${scoreClass}`;
+    const scoreBar = item.score != null ? `<span class="result-score-bar"><span class="result-score-fill" style="width:${item.score}%"></span></span>` : '';
+    const dirHtml = item.callDirection ? directionBadge(item.callDirection) : '';
     row.innerHTML = `
-      <strong>${escapeHtml(item.fileName)}</strong>
-      <span>${item.score != null ? `Nota ${item.score}` : 'Sem nota'} • ${item.score != null && item.score >= 70 ? 'Boa' : item.score != null ? 'Ruim' : 'Sem classificação'} • Sentimento: ${escapeHtml(item.sentimentLabel || 'sem sentimento')} • ${escapeHtml(item.status)}</span>
-      <span>${escapeHtml(safeResultPreview(item))}</span>
+      <span class="result-row-left">
+        ${scoreBar}
+        <strong>${escapeHtml(item.fileName)}</strong>
+      </span>
+      <span class="result-row-meta">${item.score != null ? `Nota ${item.score}` : 'Sem nota'} • ${item.score != null && item.score >= 70 ? 'Boa' : item.score != null ? 'Ruim' : 'Sem classificação'} • Sentimento: ${escapeHtml(item.sentimentLabel || 'sem sentimento')}${dirHtml ? ' • ' + dirHtml : ''}</span>
+      <span class="result-row-summary">${escapeHtml(safeResultPreview(item))}</span>
     `;
     row.addEventListener('click', () => {
       const idx = state.callAnalyses.findIndex((call) => call.id === item.id);
@@ -3595,6 +3654,7 @@ function renderCallResultsList() {
       }
     });
     el.callResultsList.appendChild(row);
+    });
   });
 }
 

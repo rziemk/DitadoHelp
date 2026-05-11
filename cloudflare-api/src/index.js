@@ -581,8 +581,8 @@ async function handleCallComparisonsPush(env, userId, body) {
         `INSERT INTO call_recordings (
            id, user_id, group_id, file_name, file_path, status, is_transcribed, raw_transcript, speaker_transcript,
            transcript_summary, analysis, comparison_summary, sentiment_label, sentiment_summary, sentiment_people,
-           score, is_good, error, transcribed_at, analyzed_at, created_at, updated_at, deleted_at
-         ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22, NULL)
+           score, is_good, error, transcribed_at, analyzed_at, created_at, updated_at, call_motive, call_direction, deleted_at
+         ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22, ?23, ?24, NULL)
          ON CONFLICT(id) DO UPDATE SET
            group_id = excluded.group_id,
            file_name = excluded.file_name,
@@ -602,6 +602,8 @@ async function handleCallComparisonsPush(env, userId, body) {
            error = excluded.error,
            transcribed_at = excluded.transcribed_at,
            analyzed_at = excluded.analyzed_at,
+           call_motive = excluded.call_motive,
+           call_direction = excluded.call_direction,
            updated_at = excluded.updated_at,
            deleted_at = NULL`,
       ).bind(
@@ -627,6 +629,8 @@ async function handleCallComparisonsPush(env, userId, body) {
         trimString(call?.analyzed_at),
         callCreatedAt,
         callUpdatedAt,
+        trimString(call?.call_motive),
+        trimString(call?.call_direction),
       ).run();
     }
   }
