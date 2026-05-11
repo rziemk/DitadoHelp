@@ -5,7 +5,7 @@ import { exists, mkdir, readDir, readFile, readTextFile, writeFile, writeTextFil
 
 const STORAGE_KEY = 'scribeflowai.desktop.config.v2';
 const LEGACY_STORAGE_KEYS = ['helpscribe.desktop.config.v2', 'helpscribe.desktop.config.v1'];
-const APP_VERSION = '0.1.61';
+const APP_VERSION = '0.1.62';
 const CALL_COMPARISON_GROUPS_KEY = 'scribeflowai.callComparisonGroups.v1';
 const CALL_COMPARISON_SCRIPTS_KEY = 'scribeflowai.callComparisonScripts.v1';
 const HISTORY_FILE_NAME = 'conversations.jsonl';
@@ -300,6 +300,8 @@ const el = {
   callResultsList: document.getElementById('callResultsList'),
   callGroupSummaryOutput: document.getElementById('callGroupSummaryOutput'),
   callGroupDashboard: document.getElementById('callGroupDashboard'),
+  callAnalyticView: document.getElementById('callAnalyticView'),
+  callAnalyticContent: document.getElementById('callAnalyticContent'),
   historyList: document.getElementById('historyList'),
   historyUse: document.getElementById('historyUse'),
   historyCopy: document.getElementById('historyCopy'),
@@ -2657,11 +2659,13 @@ function migrateLegacyGroupScripts() {
 }
 
 function setCallAnalysisSubtab(tabName) {
-  const active = ['manage', 'analyze', 'results'].includes(tabName) ? tabName : 'manage';
+  const active = ['manage', 'analyze', 'results', 'analytic'].includes(tabName) ? tabName : 'manage';
   el.callSubtabs.forEach((btn) => btn.classList.toggle('active', btn.dataset.callTab === active));
   el.callManageView?.classList.toggle('active', active === 'manage');
   el.callAnalyzeView?.classList.toggle('active', active === 'analyze');
   el.callResultsView?.classList.toggle('active', active === 'results');
+  el.callAnalyticView?.classList.toggle('active', active === 'analytic');
+  if (active === 'analytic') renderCallAnalyticView();
 }
 
 function renderCallScriptList() {
@@ -3637,13 +3641,17 @@ function renderCallResultsList() {
     row.type = 'button';
     row.className = `call-result-item${scoreClass}`;
     const scoreBar = item.score != null ? `<span class="result-score-bar"><span class="result-score-fill" style="width:${item.score}%"></span></span>` : '';
-    const dirHtml = item.callDirection ? directionBadge(item.callDirection) : '';
+    const dirHtml = directionBadge(item.callDirection);
+    const motiveHtml = item.callMotive ? `<span class="call-motive-chip">${escapeHtml(item.callMotive)}</span>` : '';
+    const contacts = (item.sentimentPeople || '').split('\n').filter(Boolean).map((l) => l.split(' - ')[0]?.trim()).filter(Boolean);
+    const contactsHtml = contacts.length ? `<span class="result-contacts">${contacts.map((c) => `<span>${escapeHtml(c)}</span>`).join('')}</span>` : '';
     row.innerHTML = `
-      <span class="result-row-left">
+      <span class="result-row-top">
         ${scoreBar}
-        <strong>${escapeHtml(item.fileName)}</strong>
+        <strong class="result-filename">${escapeHtml(item.fileName)}</strong>
+        <span class="result-badges">${dirHtml}${motiveHtml}</span>
       </span>
-      <span class="result-row-meta">${item.score != null ? `Nota ${item.score}` : 'Sem nota'} • ${item.score != null && item.score >= 70 ? 'Boa' : item.score != null ? 'Ruim' : 'Sem classificação'} • Sentimento: ${escapeHtml(item.sentimentLabel || 'sem sentimento')}${dirHtml ? ' • ' + dirHtml : ''}</span>
+      <span class="result-row-meta">Nota ${item.score != null ? item.score : '—'} • ${item.score != null && item.score >= 70 ? 'Boa' : item.score != null ? 'Ruim' : 'Sem nota'} • Sentimento: ${escapeHtml(item.sentimentLabel || 'sem sentimento')}${contactsHtml ? ' • ' : ''}${contactsHtml}</span>
       <span class="result-row-summary">${escapeHtml(safeResultPreview(item))}</span>
     `;
     row.addEventListener('click', () => {
@@ -3656,6 +3664,139 @@ function renderCallResultsList() {
     el.callResultsList.appendChild(row);
     });
   });
+}
+
+function renderCallAnalyticView() {
+  if (!el.callAnalyticContent) return;
+  const group = currentCallComparisonGroup();
+  const calls = group?.calls || [];
+  const analyzed = calls.filter((c) => c.analysis || c.score != null);
+  const scored = analyzed.filter((c) => c.score != null);
+
+  if (!calls.length) {
+    el.callAnalyticContent.innerHTML = '<p class="muted" style="padding:16px">Nenhuma ligação carregada ainda.</p>';
+    return;
+  }
+
+  // --- KPIs ---
+  const total = calls.length;
+  const transcribed = calls.filter((c) => c.rawTranscript || c.speakerTranscript).length;
+  const analyzedCount = analyzed.length;
+  const good = scored.filter((c) => Number(c.score) >= 70).length;
+  const bad = scored.filter((c) => Number(c.score) < 70).length;
+  const avg = scored.length ? Math.round(scored.reduce((s, c) => s + Number(c.score), 0) / scored.length) : null;
+  const ativaCount = calls.filter((c) => c.callDirection === 'ativa').length;
+  const receptivaCount = calls.filter((c) => c.callDirection === 'receptiva').length;
+  const semDir = calls.filter((c) => !c.callDirection).length;
+  const errors = calls.filter((c) => c.error).length;
+  const avgColor = avg == null ? 'neutral' : avg >= 70 ? 'good' : avg >= 50 ? 'warn' : 'bad';
+
+  // --- Motivo breakdown ---
+  const motiveStats = new Map();
+  calls.forEach((c) => {
+    const key = c.callMotive?.trim() || '—';
+    if (!motiveStats.has(key)) motiveStats.set(key, { count: 0, scores: [], ativa: 0, receptiva: 0 });
+    const m = motiveStats.get(key);
+    m.count++;
+    if (c.score != null) m.scores.push(Number(c.score));
+    if (c.callDirection === 'ativa') m.ativa++;
+    if (c.callDirection === 'receptiva') m.receptiva++;
+  });
+  const motiveRows = [...motiveStats.entries()]
+    .sort((a, b) => b[1].count - a[1].count)
+    .map(([motive, s]) => {
+      const mAvg = s.scores.length ? Math.round(s.scores.reduce((a, b) => a + b, 0) / s.scores.length) : null;
+      const mGood = s.scores.filter((sc) => sc >= 70).length;
+      const mBad = s.scores.filter((sc) => sc < 70).length;
+      const mColor = mAvg == null ? '' : mAvg >= 70 ? 'color:#16a34a' : mAvg >= 50 ? 'color:#d97706' : 'color:#dc2626';
+      return `<tr>
+        <td><span class="call-motive-chip">${escapeHtml(motive)}</span></td>
+        <td class="an-num">${s.count}</td>
+        <td class="an-num" style="${mColor}">${mAvg != null ? mAvg : '—'}</td>
+        <td class="an-num" style="color:#16a34a">${mGood}</td>
+        <td class="an-num" style="color:#dc2626">${mBad}</td>
+        <td class="an-num">${s.ativa ? `<span class="dir-badge dir-ativa">↑ ${s.ativa}</span>` : ''}${s.receptiva ? `<span class="dir-badge dir-receptiva">↓ ${s.receptiva}</span>` : ''}</td>
+      </tr>`;
+    }).join('');
+
+  // --- Score bands ---
+  const bands = [
+    { label: '90–100', min: 90, max: 100, color: '#16a34a' },
+    { label: '70–89', min: 70, max: 89, color: '#22c55e' },
+    { label: '50–69', min: 50, max: 69, color: '#f59e0b' },
+    { label: '0–49', min: 0, max: 49, color: '#ef4444' },
+  ];
+  const bandRows = bands.map((b) => {
+    const n = scored.filter((c) => Number(c.score) >= b.min && Number(c.score) <= b.max).length;
+    const pct = scored.length ? Math.round((n / scored.length) * 100) : 0;
+    return `<div class="an-band-row">
+      <span class="an-band-label">${b.label}</span>
+      <span class="an-band-bar"><span class="an-band-fill" style="width:${pct}%;background:${b.color}"></span></span>
+      <span class="an-band-num">${n} (${pct}%)</span>
+    </div>`;
+  }).join('');
+
+  // --- Sentiment ---
+  const sentMap = new Map();
+  analyzed.forEach((c) => { const s = c.sentimentLabel || 'indefinido'; sentMap.set(s, (sentMap.get(s) || 0) + 1); });
+  const sentRows = [...sentMap.entries()].sort((a, b) => b[1] - a[1])
+    .map(([s, n]) => `<tr><td>${escapeHtml(s)}</td><td class="an-num">${n}</td></tr>`).join('');
+
+  // --- Contacts ---
+  const contactMap = new Map();
+  calls.forEach((c) => {
+    (c.sentimentPeople || '').split('\n').filter(Boolean).forEach((line) => {
+      const name = line.split(' - ')[0]?.trim();
+      if (name && name.toLowerCase() !== 'pessoa a' && name.toLowerCase() !== 'pessoa b') {
+        contactMap.set(name, (contactMap.get(name) || 0) + 1);
+      }
+    });
+  });
+  const contactRows = [...contactMap.entries()].sort((a, b) => b[1] - a[1]).slice(0, 10)
+    .map(([name, n]) => `<tr><td>${escapeHtml(name)}</td><td class="an-num">${n}</td></tr>`).join('');
+
+  el.callAnalyticContent.innerHTML = `
+    <div class="an-section">
+      <div class="dash-kpis">
+        <div class="dash-kpi"><span class="dash-kpi-value">${total}</span><span class="dash-kpi-label">Total</span></div>
+        <div class="dash-kpi"><span class="dash-kpi-value">${transcribed}</span><span class="dash-kpi-label">Transcritas</span></div>
+        <div class="dash-kpi"><span class="dash-kpi-value">${analyzedCount}</span><span class="dash-kpi-label">Analisadas</span></div>
+        <div class="dash-kpi ${avgColor}"><span class="dash-kpi-value">${avg != null ? avg : '—'}</span><span class="dash-kpi-label">Nota média</span></div>
+        <div class="dash-kpi good"><span class="dash-kpi-value">${good}</span><span class="dash-kpi-label">Boas ≥ 70</span></div>
+        <div class="dash-kpi bad"><span class="dash-kpi-value">${bad}</span><span class="dash-kpi-label">Ruins < 70</span></div>
+        <div class="dash-kpi dir-ativa-kpi"><span class="dash-kpi-value">${ativaCount}</span><span class="dash-kpi-label">↑ Ativas</span></div>
+        <div class="dash-kpi dir-receptiva-kpi"><span class="dash-kpi-value">${receptivaCount}</span><span class="dash-kpi-label">↓ Receptivas</span></div>
+        ${semDir ? `<div class="dash-kpi neutral"><span class="dash-kpi-value">${semDir}</span><span class="dash-kpi-label">Direção?</span></div>` : ''}
+        ${errors ? `<div class="dash-kpi bad"><span class="dash-kpi-value">${errors}</span><span class="dash-kpi-label">Erros</span></div>` : ''}
+      </div>
+    </div>
+
+    <div class="an-grid">
+      <div class="an-card">
+        <div class="an-card-title">Motivos das ligações</div>
+        ${motiveRows ? `<table class="an-table">
+          <thead><tr><th>Motivo</th><th>Qtd</th><th>Nota</th><th>Boas</th><th>Ruins</th><th>Direção</th></tr></thead>
+          <tbody>${motiveRows}</tbody>
+        </table>` : '<p class="muted">Sem motivos identificados. Reanálise necessária para novas ligações.</p>'}
+      </div>
+
+      <div class="an-card">
+        <div class="an-card-title">Distribuição de notas</div>
+        ${scored.length ? `<div class="an-bands">${bandRows}</div>` : '<p class="muted">Nenhuma ligação com nota.</p>'}
+      </div>
+    </div>
+
+    <div class="an-grid">
+      <div class="an-card">
+        <div class="an-card-title">Sentimentos</div>
+        ${sentRows ? `<table class="an-table"><thead><tr><th>Sentimento</th><th>Qtd</th></tr></thead><tbody>${sentRows}</tbody></table>` : '<p class="muted">Sem dados de sentimento.</p>'}
+      </div>
+      ${contactRows ? `<div class="an-card">
+        <div class="an-card-title">Contatos identificados</div>
+        <table class="an-table"><thead><tr><th>Nome</th><th>Ligações</th></tr></thead><tbody>${contactRows}</tbody></table>
+      </div>` : ''}
+    </div>
+  `;
 }
 
 function extractScore(text = '') {
