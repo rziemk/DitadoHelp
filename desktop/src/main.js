@@ -5,7 +5,7 @@ import { exists, mkdir, readDir, readFile, readTextFile, writeFile, writeTextFil
 
 const STORAGE_KEY = 'scribeflowai.desktop.config.v2';
 const LEGACY_STORAGE_KEYS = ['helpscribe.desktop.config.v2', 'helpscribe.desktop.config.v1'];
-const APP_VERSION = '0.1.67';
+const APP_VERSION = '0.1.68';
 const CALL_COMPARISON_GROUPS_KEY = 'scribeflowai.callComparisonGroups.v1';
 const CALL_COMPARISON_SCRIPTS_KEY = 'scribeflowai.callComparisonScripts.v1';
 const HISTORY_FILE_NAME = 'conversations.jsonl';
@@ -3010,6 +3010,23 @@ function directionBadge(dir) {
   return `<span class="dir-badge ${klass}">${label}</span>`;
 }
 
+function sentimentClass(label) {
+  const l = (label || '').toLowerCase();
+  if (['tranquilo', 'satisfeito'].includes(l)) return 'sent-calm';
+  if (['informativo'].includes(l)) return 'sent-info';
+  if (['preocupado', 'confuso'].includes(l)) return 'sent-worried';
+  if (['nervoso', 'tenso', 'misto'].includes(l)) return 'sent-tense';
+  if (['irritado', 'hostil'].includes(l)) return 'sent-angry';
+  return '';
+}
+
+function sentimentChip(label, count) {
+  const cls = sentimentClass(label);
+  const extra = cls ? ` ${cls}` : '';
+  const countHtml = count != null ? `: <strong>${count}</strong>` : '';
+  return `<span class="dash-sentiment-chip${extra}">${escapeHtml(label)}${countHtml}</span>`;
+}
+
 function transcriptPreview(item) {
   const text = item.speakerTranscript || item.rawTranscript || '';
   if (!text) return 'Ainda não transcrita.';
@@ -3325,14 +3342,19 @@ async function runCallComparisonItem(item, script, group) {
 
   try {
     const prompt =
-      'Compare o que deveria ter acontecido em uma ligação com o que realmente aconteceu.\n' +
+      'Você é um analista de qualidade de ligações. Compare o que deveria ter acontecido com o que realmente aconteceu.\n' +
       'Responda APENAS em JSON válido, sem markdown, no formato:\n' +
-      '{"resumo_ligacao":"...","resumo_comparacao":"...","sentimento_geral":"positivo|neutro|negativo|tenso|misto","resumo_sentimento":"...","sentimento_por_pessoa":[{"pessoa":"Pessoa A","sentimento":"...","evidencia":"..."},{"pessoa":"Pessoa B","sentimento":"...","evidencia":"..."}],"pontos_cumpridos":["..."],"pontos_faltantes":["..."],"divergencias":["..."],"evidencias":["..."],"finalizacao":"concluida|interrompida|indefinida","nota":0,"resultado":"boa|ruim","analise_detalhada":"...","motivo":"...","direcao":"ativa|receptiva"}\n' +
-      'A nota deve ser de 0 a 100. Considere boa somente nota >= 70.\n' +
-      'No sentimento, avalie clima geral e cada interlocutor: estresse, cordialidade, confusão, tensão, irritação, cooperação e mudança de tom.\n' +
-      'Se a ligação não chegou ao fechamento, confirmação final ou desligou/interrompeu antes de concluir, marque isso em finalizacao e nos pontos faltantes.\n' +
-      'Em "motivo", classifique o assunto principal da ligação em uma categoria curta (ex: Cobrança, Negociação, Vendas, Suporte, Informação, Reclamação, Encerramento de contrato, Agendamento, Outro).\n' +
-      'Em "direcao", infira se a ligação foi "ativa" (saímos para ligar) ou "receptiva" (nos ligaram). Use pistas como quem cumprimenta primeiro, quem apresenta o assunto, o contexto da empresa.\n\n' +
+      '{"resumo_ligacao":"...","resumo_comparacao":"...","sentimento_geral":"tranquilo|informativo|preocupado|nervoso|tenso|irritado|hostil|confuso|satisfeito|misto","resumo_sentimento":"...","sentimento_por_pessoa":[{"pessoa":"Pessoa A","sentimento":"...","evidencia":"..."}],"pontos_cumpridos":["..."],"pontos_faltantes":["..."],"divergencias":["..."],"evidencias":["..."],"finalizacao":"concluida|interrompida|indefinida","nota":0,"resultado":"boa|ruim","analise_detalhada":"...","motivo":"...","direcao":"ativa|receptiva"}\n' +
+      'Regras obrigatórias:\n' +
+      '1. Nota de 0 a 100. Considere boa somente nota >= 70.\n' +
+      '2. "sentimento_geral": classifique o estado emocional predominante com termos descritivos reais (tranquilo, informativo, preocupado, nervoso, tenso, irritado, hostil, confuso, satisfeito, misto). NUNCA use positivo/neutro/negativo.\n' +
+      '3. "resumo_sentimento": explique o estado emocional observado com base em tom de voz, escolha de palavras, ritmo e contexto da conversa.\n' +
+      '4. "sentimento_por_pessoa": inclua SOMENTE os interlocutores que efetivamente aparecem na transcrição. Se apenas UMA pessoa fala (mensagem de voz, recado, monólogo), inclua apenas UMA entrada. Se duas pessoas falam, inclua duas entradas. Não invente participantes.\n' +
+      '5. Para cada interlocutor, avalie: tensão, cordialidade, confusão, irritação, cooperação, preocupação e mudanças de tom ao longo da conversa.\n' +
+      '6. Se a ligação não chegou ao fechamento ou foi interrompida antes de concluir, marque em finalizacao e nos pontos faltantes.\n' +
+      '7. "motivo": classifique o assunto principal em uma categoria curta (ex: Cobrança, Negociação, Vendas, Suporte, Informação, Reclamação, Encerramento de contrato, Agendamento, Outro).\n' +
+      '8. "direcao": infira se foi "ativa" (saímos para ligar) ou "receptiva" (nos ligaram) pelas pistas da conversa (quem cumprimenta primeiro, quem apresenta o assunto).\n' +
+      '9. O motivo da ligação deve contextualizar toda a análise: uma ligação de Cobrança tem critérios e tom esperados diferentes de uma de Suporte ou Vendas. Adapte a nota e os pontos avaliados ao objetivo identificado.\n\n' +
       `Grupo de comparação: ${group?.name || 'Sem nome'}\n` +
       `Script de referência: ${script?.name || 'Sem nome'}\n\n` +
       `Esperado:\n${script.body}\n\n` +
@@ -3547,7 +3569,7 @@ function renderCallGroupDashboard() {
   });
   const sentimentRows = [...sentimentMap.entries()]
     .sort((a, b) => b[1] - a[1])
-    .map(([label, count]) => `<span class="dash-sentiment-chip">${escapeHtml(label)}: <strong>${count}</strong></span>`)
+    .map(([label, count]) => sentimentChip(label, count))
     .join('');
 
   const motiveMap = new Map();
@@ -3557,7 +3579,7 @@ function renderCallGroupDashboard() {
   });
   const motiveRows = [...motiveMap.entries()]
     .sort((a, b) => b[1] - a[1])
-    .map(([label, count]) => `<span class="dash-sentiment-chip">${escapeHtml(label)}: <strong>${count}</strong></span>`)
+    .map(([label, count]) => sentimentChip(label, count))
     .join('');
 
   const ativaCount = calls.filter((c) => c.callDirection === 'ativa').length;
