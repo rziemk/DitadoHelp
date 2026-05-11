@@ -20,3 +20,7 @@ desktop/.env.macos.local
 desktop/node_modules/
 desktop/dist/
 desktop/src-tauri/target/
+AuthKey_3KN4NZ4Z8L.p8
+*.p8
+*.cer
+*.csr
