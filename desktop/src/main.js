@@ -5,7 +5,7 @@ import { exists, mkdir, readDir, readFile, readTextFile, writeFile, writeTextFil
 
 const STORAGE_KEY = 'scribeflowai.desktop.config.v2';
 const LEGACY_STORAGE_KEYS = ['helpscribe.desktop.config.v2', 'helpscribe.desktop.config.v1'];
-const APP_VERSION = '0.1.68';
+const APP_VERSION = '0.1.69';
 const CALL_COMPARISON_GROUPS_KEY = 'scribeflowai.callComparisonGroups.v1';
 const CALL_COMPARISON_SCRIPTS_KEY = 'scribeflowai.callComparisonScripts.v1';
 const HISTORY_FILE_NAME = 'conversations.jsonl';

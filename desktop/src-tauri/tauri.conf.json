@@ -1,8 +1,8 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
   "productName": "Scribeflowai",
-  "version": "0.1.68",
-  "identifier": "com.scribeflowai.app",
+  "version": "0.1.69",
+  "identifier": "com.scribeflowai.desktop",
   "build": {
     "beforeDevCommand": "npm run dev",
     "beforeBuildCommand": "npm run build",
