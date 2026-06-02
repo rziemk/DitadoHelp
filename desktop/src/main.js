@@ -5,12 +5,21 @@ import { exists, mkdir, readDir, readFile, readTextFile, writeFile, writeTextFil
 
 const STORAGE_KEY = 'scribeflowai.desktop.config.v2';
 const LEGACY_STORAGE_KEYS = ['helpscribe.desktop.config.v2', 'helpscribe.desktop.config.v1'];
-const APP_VERSION = '0.1.70';
+const APP_VERSION = '0.1.72';
 const CALL_COMPARISON_GROUPS_KEY = 'scribeflowai.callComparisonGroups.v1';
 const CALL_COMPARISON_SCRIPTS_KEY = 'scribeflowai.callComparisonScripts.v1';
 const HISTORY_FILE_NAME = 'conversations.jsonl';
 const HISTORY_SUBDIR = 'Scribeflowai';
 const HISTORY_LIMIT = 200;
+const MAX_STT_BYTES = 25 * 1024 * 1024;
+const TRANSCRIPT_COVERAGE_WARN_SECONDS = 75;
+
+function parentFolderPath(filePath = '') {
+  if (!filePath) return '';
+  const normalized = String(filePath).replace(/\\/g, '/').replace(/\/+$/g, '');
+  const idx = normalized.lastIndexOf('/');
+  return idx <= 0 ? '' : normalized.slice(0, idx);
+}
 
 const defaultConfig = {
   sttKey: '',
@@ -259,6 +268,7 @@ const el = {
   audioTranscriptOutput: document.getElementById('audioTranscriptOutput'),
   autoSummaryFromAudio: document.getElementById('autoSummaryFromAudio'),
   audioSummaryOutput: document.getElementById('audioSummaryOutput'),
+  audioTranscriptCoverage: document.getElementById('audioTranscriptCoverage'),
   chooseAutoImportDirBtn: document.getElementById('chooseAutoImportDirBtn'),
   scanAutoImportNowBtn: document.getElementById('scanAutoImportNowBtn'),
   autoImportDirLabel: document.getElementById('autoImportDirLabel'),
@@ -296,6 +306,7 @@ const el = {
   copyCallAnalysisBtn: document.getElementById('copyCallAnalysisBtn'),
   selectedCallStatus: document.getElementById('selectedCallStatus'),
   callAudioPlayer: document.getElementById('callAudioPlayer'),
+  callTranscriptCoverage: document.getElementById('callTranscriptCoverage'),
   callTranscriptOutput: document.getElementById('callTranscriptOutput'),
   callAnalysisOutput: document.getElementById('callAnalysisOutput'),
   callResultsList: document.getElementById('callResultsList'),
@@ -826,6 +837,7 @@ function syncConfigToUI() {
   el.uiLanguage.value = state.config.uiLanguage;
   el.autoSummaryFromAudio.checked = Boolean(state.config.autoSummaryFromAudio);
   el.audioSummaryOutput.textContent = 'Resumo da transcrição aparecerá aqui.';
+  setTranscriptCoverage(el.audioTranscriptCoverage, null, 'A conferência de duração aparecerá aqui após a transcrição.');
   el.autoImportDirLabel.textContent = state.config.autoImportCallsDir || 'Nenhuma pasta configurada.';
   el.enableAutoImport.checked = Boolean(state.config.autoImportCallsEnabled);
   state.autoImportSeen = new Set(Array.isArray(state.config.autoImportCallsSeen) ? state.config.autoImportCallsSeen : []);
@@ -1461,6 +1473,7 @@ function serializeCallGroupForCloud(group) {
       id: item.id,
       file_name: item.fileName,
       file_path: item.filePath,
+      source_folder_path: item.sourceFolderPath || parentFolderPath(item.filePath),
       status: item.status,
       is_transcribed: Boolean(item.rawTranscript || item.speakerTranscript),
       raw_transcript: item.rawTranscript || '',
@@ -2014,16 +2027,26 @@ function ensureResultVisible(expectedText) {
   commitResultToEditor(expected);
 }
 
-async function transcribe(blob, signal) {
+function createTranscriptionFormData(blob, options = {}) {
   const sttKey = currentSttKey();
   if (!sttKey) throw new Error('Defina STT API Key.');
   const fd = new FormData();
   fd.append('model', state.config.sttModel || defaultConfig.sttModel);
   const ext = uploadAudioExt(mimeToExt(blob.type || state.recordingMimeType || '') || state.recordingExt || 'mp4');
-  log(`[stt] Enviando audio.${ext} (${blob.type || 'sem mime'}, ${(blob.size / 1024).toFixed(1)} KB).`);
+  const responseFormat = options.responseFormat || 'text';
+  const withTimestamps = Boolean(options.withTimestamps);
+  log(`[stt] Enviando audio.${ext} (${blob.type || 'sem mime'}, ${(blob.size / 1024).toFixed(1)} KB, ${responseFormat}${withTimestamps ? ' + timestamps' : ''}).`);
   fd.append('file', blob, `audio.${ext}`);
-  fd.append('response_format', 'text');
+  fd.append('response_format', responseFormat);
+  if (withTimestamps) {
+    fd.append('timestamp_granularities[]', 'segment');
+  }
   fd.append('language', 'pt');
+  return { sttKey, fd };
+}
+
+async function requestOpenAITranscription(blob, signal, options = {}) {
+  const { sttKey, fd } = createTranscriptionFormData(blob, options);
 
   const resp = await fetch('https://api.openai.com/v1/audio/transcriptions', {
     method: 'POST',
@@ -2037,11 +2060,265 @@ async function transcribe(blob, signal) {
     throw new Error(err?.error?.message || `Falha STT (${resp.status})`);
   }
 
+  return resp;
+}
+
+async function transcribe(blob, signal) {
+  const resp = await requestOpenAITranscription(blob, signal, { responseFormat: 'text' });
   return (await resp.text()).trim();
+}
+
+async function transcribeDetailed(blob, signal, options = {}) {
+  const knownDuration = normalizeSeconds(options.durationSeconds);
+  try {
+    const resp = await requestOpenAITranscription(blob, signal, {
+      responseFormat: 'verbose_json',
+      withTimestamps: true,
+    });
+    const data = await resp.json();
+    const result = normalizeSttVerboseResponse(data, knownDuration);
+    if (!result.text) throw new Error('Transcrição vazia.');
+    if (!result.segments.length) {
+      log('[stt] A API retornou transcrição detalhada sem segmentos; os marcadores serão estimados.');
+    }
+    return result;
+  } catch (err) {
+    if (err?.name === 'AbortError') throw err;
+    log(`[stt] Timestamps reais indisponíveis neste modelo/resposta: ${err.message}. Usando marcação estimada.`);
+    const text = await transcribe(blob, signal);
+    return {
+      text,
+      segments: [],
+      durationSeconds: knownDuration,
+      timestampSource: 'estimated',
+    };
+  }
+}
+
+function normalizeSttVerboseResponse(data, knownDuration = null) {
+  const segments = Array.isArray(data?.segments)
+    ? data.segments.map(normalizeSttSegment).filter(Boolean)
+    : [];
+  const durationSeconds = normalizeSeconds(data?.duration) ?? knownDuration;
+  return {
+    text: trimString(data?.text),
+    segments,
+    durationSeconds,
+    timestampSource: segments.length ? 'api' : 'estimated',
+  };
+}
+
+function normalizeSttSegment(segment) {
+  const start = normalizeSeconds(segment?.start);
+  const end = normalizeSeconds(segment?.end);
+  const text = trimString(segment?.text);
+  if (!text) return null;
+  return {
+    start: start ?? 0,
+    end: end ?? start ?? 0,
+    text,
+  };
 }
 
 function uploadAudioExt(ext) {
   return String(ext || '').toLowerCase() === 'opus' ? 'ogg' : ext;
+}
+
+function normalizeSeconds(value) {
+  const seconds = Number(value);
+  return Number.isFinite(seconds) && seconds >= 0 ? seconds : null;
+}
+
+async function getAudioDurationSeconds(blob) {
+  if (!blob?.size || typeof document === 'undefined') return null;
+  return await new Promise((resolve) => {
+    const audio = document.createElement('audio');
+    const url = URL.createObjectURL(blob);
+    let finished = false;
+    let timer = null;
+
+    const finish = (value) => {
+      if (finished) return;
+      finished = true;
+      if (timer) clearTimeout(timer);
+      audio.removeAttribute('src');
+      try {
+        audio.load();
+      } catch {
+        // Best effort cleanup only.
+      }
+      URL.revokeObjectURL(url);
+      resolve(normalizeSeconds(value));
+    };
+
+    timer = setTimeout(() => finish(null), 3000);
+    audio.preload = 'metadata';
+    audio.onloadedmetadata = () => finish(audio.duration);
+    audio.onerror = () => finish(null);
+    audio.src = url;
+  });
+}
+
+function buildTranscriptTiming(sttResult, audioDurationSeconds = null) {
+  const text = trimString(sttResult?.text);
+  const durationSeconds = normalizeSeconds(audioDurationSeconds) ?? normalizeSeconds(sttResult?.durationSeconds);
+  const realSegments = Array.isArray(sttResult?.segments)
+    ? sttResult.segments.map(normalizeSttSegment).filter(Boolean)
+    : [];
+  const hasRealSegments = realSegments.length > 0;
+  const lines = hasRealSegments
+    ? buildTimedLinesFromSegments(realSegments)
+    : buildEstimatedTimedLines(text, durationSeconds);
+  const coveredSeconds = hasRealSegments
+    ? Math.max(...realSegments.map((segment) => segment.end || segment.start || 0))
+    : durationSeconds;
+
+  return {
+    text,
+    lines,
+    durationSeconds,
+    coveredSeconds: normalizeSeconds(coveredSeconds),
+    timestampSource: hasRealSegments ? 'api' : durationSeconds ? 'estimated' : 'none',
+  };
+}
+
+function buildTimedLinesFromSegments(segments) {
+  return segments.flatMap((segment) => {
+    const sentences = splitTranscriptSentences(segment.text);
+    if (!sentences.length) return [];
+    const span = Math.max(0, (segment.end || segment.start || 0) - (segment.start || 0));
+    const totalWeight = sentences.reduce((sum, sentence) => sum + sentenceWeight(sentence), 0) || 1;
+    let elapsedWeight = 0;
+    return sentences.map((sentence) => {
+      const startSeconds = (segment.start || 0) + (span * elapsedWeight / totalWeight);
+      elapsedWeight += sentenceWeight(sentence);
+      return {
+        startSeconds,
+        text: sentence,
+        timestampSource: 'api',
+      };
+    });
+  });
+}
+
+function buildEstimatedTimedLines(text, durationSeconds = null) {
+  const sentences = splitTranscriptSentences(text);
+  if (!sentences.length) return [];
+  const totalWeight = sentences.reduce((sum, sentence) => sum + sentenceWeight(sentence), 0) || 1;
+  let elapsedWeight = 0;
+  return sentences.map((sentence) => {
+    const startSeconds = durationSeconds == null ? null : durationSeconds * elapsedWeight / totalWeight;
+    elapsedWeight += sentenceWeight(sentence);
+    return {
+      startSeconds,
+      text: sentence,
+      timestampSource: durationSeconds == null ? 'none' : 'estimated',
+    };
+  });
+}
+
+function splitTranscriptSentences(text = '') {
+  const normalized = trimString(text).replace(/\s+/g, ' ');
+  if (!normalized) return [];
+  const sentenceMatches = normalized.match(/[^.!?]+[.!?]+|[^.!?]+$/g) || [normalized];
+  const sentences = sentenceMatches.map((sentence) => sentence.trim()).filter(Boolean);
+  if (sentences.length > 1 || countWords(normalized) <= 35) return sentences;
+
+  const words = normalized.split(/\s+/).filter(Boolean);
+  const chunks = [];
+  for (let i = 0; i < words.length; i += 28) {
+    chunks.push(words.slice(i, i + 28).join(' '));
+  }
+  return chunks;
+}
+
+function sentenceWeight(sentence) {
+  return Math.max(1, countWords(sentence));
+}
+
+function countWords(text = '') {
+  return (trimString(text).match(/\S+/g) || []).length;
+}
+
+function formatTimedTranscript(timing) {
+  if (!timing?.lines?.length) return trimString(timing?.text);
+  return timing.lines.map((line) => `${formatTranscriptTimestamp(line.startSeconds)} ${line.text}`).join('\n');
+}
+
+function hasMinuteMarkers(text = '') {
+  return /\[min\s+\d{1,3}\s*\|/i.test(text);
+}
+
+function formatTranscriptTimestamp(seconds) {
+  const normalized = normalizeSeconds(seconds);
+  if (normalized == null) return '[min ?]';
+  const minute = Math.floor(normalized / 60) + 1;
+  return `[min ${String(minute).padStart(2, '0')} | ${formatDurationClock(normalized)}]`;
+}
+
+function buildTranscriptCompleteness(timing) {
+  const duration = normalizeSeconds(timing?.durationSeconds);
+  const covered = normalizeSeconds(timing?.coveredSeconds);
+  const source = timing?.timestampSource || 'none';
+  if (duration == null) {
+    return {
+      status: 'warn',
+      message: 'Conferência limitada: não foi possível ler a duração do áudio para comparar com os marcadores.',
+    };
+  }
+
+  if (source !== 'api') {
+    return {
+      status: 'warn',
+      message: `Conferência limitada: áudio ${formatDurationClock(duration)}. Os marcadores foram estimados porque o STT não retornou timestamps reais; isso ajuda a navegar, mas não comprova que a transcrição chegou ao fim. Para validação real por segmentos, use um modelo STT compatível com timestamps, como whisper-1.`,
+    };
+  }
+
+  if (covered == null) {
+    return {
+      status: 'warn',
+      message: `Conferência limitada: áudio ${formatDurationClock(duration)}, mas não encontrei o último timestamp real da transcrição.`,
+    };
+  }
+
+  const missingSeconds = Math.max(0, duration - covered);
+  const coverageRatio = duration > 0 ? covered / duration : 1;
+  const coveragePercent = Math.max(0, Math.min(100, Math.round(coverageRatio * 100)));
+  if (missingSeconds <= 10 || coverageRatio >= 0.98) {
+    return {
+      status: 'good',
+      message: `Conferência OK: áudio ${formatDurationClock(duration)}; último marcador real ${formatDurationClock(covered)}; cobertura ${coveragePercent}%.`,
+    };
+  }
+
+  const severe = missingSeconds > TRANSCRIPT_COVERAGE_WARN_SECONDS && coverageRatio < 0.92;
+  return {
+    status: severe ? 'bad' : 'warn',
+    message: `Atenção: áudio ${formatDurationClock(duration)}; último marcador real ${formatDurationClock(covered)}; cobertura ${coveragePercent}%. Faltam aproximadamente ${formatDurationClock(missingSeconds)} sem marcador, então a transcrição pode ter sido cortada.`,
+  };
+}
+
+function setTranscriptCoverage(node, completeness, fallbackText = '') {
+  if (!node) return;
+  node.classList.remove('good', 'warn', 'bad', 'muted');
+  if (!completeness) {
+    node.textContent = fallbackText;
+    node.classList.add('muted');
+    return;
+  }
+  node.textContent = completeness.message;
+  node.classList.add(completeness.status || 'warn');
+}
+
+function formatDurationClock(seconds) {
+  const total = Math.max(0, Math.round(Number(seconds) || 0));
+  const hours = Math.floor(total / 3600);
+  const minutes = Math.floor((total % 3600) / 60);
+  const secs = total % 60;
+  if (hours) {
+    return `${hours}:${String(minutes).padStart(2, '0')}:${String(secs).padStart(2, '0')}`;
+  }
+  return `${minutes}:${String(secs).padStart(2, '0')}`;
 }
 
 async function transcribeAudioFileFromDisk() {
@@ -2207,21 +2484,41 @@ async function handleLocalCallRecordingStopped() {
     const blobType = state.localCallMimeType || state.localCallRecorder?.mimeType || state.localCallChunks[0]?.type || '';
     const blob = new Blob(state.localCallChunks, { type: blobType });
     if (!blob.size) throw new Error('Nenhum áudio capturado na gravação local da call.');
+    if (blob.size > MAX_STT_BYTES) {
+      throw new Error(`Gravação muito grande (${(blob.size / 1024 / 1024).toFixed(1)} MB). O limite da API é 25 MB. Comprima o áudio ou corte em partes menores.`);
+    }
 
     const filePath = await persistLocalCallRecording(blob, state.localCallExt || mimeToExt(blobType));
     const fileName = filePath
       ? filePath.split('/').pop()?.split('\\').pop() || 'call-audio'
       : `call-audio.${state.localCallExt || mimeToExt(blobType)}`;
-    const rawText = await transcribe(blob, state.abortController.signal);
+    const audioDurationSeconds = await getAudioDurationSeconds(blob);
+    const sttResult = await transcribeDetailed(blob, state.abortController.signal, { durationSeconds: audioDurationSeconds });
+    const rawText = sttResult.text;
     if (!rawText) throw new Error('Transcrição vazia para a gravação local.');
 
-    const finalText = rawText.trim();
+    const timing = buildTranscriptTiming(sttResult, audioDurationSeconds);
+    const markedTranscript = formatTimedTranscript(timing) || rawText.trim();
+    const completeness = buildTranscriptCompleteness(timing);
+    setTranscriptCoverage(el.audioTranscriptCoverage, completeness);
+    el.selectedAudioFile.textContent = fileName;
+    el.audioTranscriptOutput.value = markedTranscript;
+    const finalText = markedTranscript;
     commitResultToEditor(finalText);
-    addHistory(finalText, 'dictate', rawText, { source: 'local_call_recording', fileName, filePath });
+    addHistory(finalText, 'dictate', rawText, {
+      source: 'local_call_recording',
+      fileName,
+      filePath,
+      audioDurationSeconds: timing.durationSeconds,
+      transcriptCoveredSeconds: timing.coveredSeconds,
+      timestampSource: timing.timestampSource,
+      transcriptCompleteness: completeness.message,
+      transcriptCompletenessStatus: completeness.status,
+    });
     log(`[call] Gravação local transcrita com sucesso (${fileName}).`);
 
     if (state.config.autoSummaryFromAudio) {
-      const summary = await summarizeTranscript(finalText, state.abortController.signal);
+      const summary = await summarizeTranscript(rawText, state.abortController.signal);
       if (summary) {
         el.audioSummaryOutput.textContent = summary;
         el.chatAnswer.textContent = summary;
@@ -2322,11 +2619,40 @@ async function scanAutoImportDirectory() {
 
 async function collectAudioFilesFromDirectory(dirPath) {
   const files = [];
+
+  // Prefer the plugin-fs recursive mode (Tauri 2), but keep a robust fallback.
+  let rootEntries = null;
+  try {
+    rootEntries = await readDir(dirPath, { recursive: true });
+  } catch {
+    rootEntries = null;
+  }
+
+  if (Array.isArray(rootEntries) && rootEntries.length) {
+    const stack = [...rootEntries];
+    while (stack.length) {
+      const entry = stack.pop();
+      if (!entry) continue;
+
+      if (Array.isArray(entry.children) && entry.children.length) {
+        stack.push(...entry.children);
+        continue;
+      }
+
+      const entryPath = entry.path || (entry.name ? await join(dirPath, entry.name) : '');
+      if (entryPath && isSupportedAudioFile(entryPath)) {
+        files.push(entryPath);
+      }
+    }
+    return files;
+  }
+
   const entries = await readDir(dirPath);
   for (const entry of entries) {
-    if (!entry?.name) continue;
-    const childPath = await join(dirPath, entry.name);
-    if (entry.isDirectory) {
+    const childPath = entry?.path || (entry?.name ? await join(dirPath, entry.name) : '');
+    if (!childPath) continue;
+
+    if (Array.isArray(entry?.children)) {
       try {
         files.push(...await collectAudioFilesFromDirectory(childPath));
       } catch (err) {
@@ -2334,7 +2660,19 @@ async function collectAudioFilesFromDirectory(dirPath) {
       }
       continue;
     }
-    if (entry.isFile && isSupportedAudioFile(childPath)) {
+
+    // We can't reliably know if it's a directory across plugin versions, so probe.
+    try {
+      const probe = await readDir(childPath);
+      if (Array.isArray(probe)) {
+        files.push(...await collectAudioFilesFromDirectory(childPath));
+        continue;
+      }
+    } catch {
+      // Not a directory or no access.
+    }
+
+    if (isSupportedAudioFile(childPath)) {
       files.push(childPath);
     }
   }
@@ -2354,6 +2692,7 @@ async function processAudioFilePath(filePath, fromAutomation = false) {
   el.selectedAudioFile.textContent = fileName;
   el.audioTranscriptOutput.value = '';
   el.audioSummaryOutput.textContent = 'Lendo arquivo de áudio...';
+  setTranscriptCoverage(el.audioTranscriptCoverage, null, 'Lendo duração do áudio para conferir cobertura...');
 
   const strings = UI_STRINGS[state.config.uiLanguage] || UI_STRINGS.pt;
   state.isProcessing = true;
@@ -2374,18 +2713,46 @@ async function processAudioFilePath(filePath, fromAutomation = false) {
       webm: 'audio/webm',
     };
     const blob = new Blob([bytes], { type: mimeTypeByExt[fileExt] || 'audio/mpeg' });
+    if (blob.size > MAX_STT_BYTES) {
+      throw new Error(`Arquivo muito grande (${(blob.size / 1024 / 1024).toFixed(1)} MB). O limite da API é 25 MB. Comprima o áudio ou corte em partes menores.`);
+    }
+    const audioDurationSeconds = await getAudioDurationSeconds(blob);
     state.recordingExt = fileExt;
-    const rawText = await transcribe(blob, state.abortController.signal);
+    const sttResult = await transcribeDetailed(blob, state.abortController.signal, { durationSeconds: audioDurationSeconds });
+    const rawText = sttResult.text;
     if (!rawText) throw new Error('Transcrição vazia para o arquivo selecionado.');
 
     const finalText = rawText.trim();
     el.audioTranscriptOutput.value = 'Identificando interlocutores...';
-    const displayTranscript = await diarizeTranscriptSemantically(finalText, state.abortController.signal);
-    el.audioTranscriptOutput.value = displayTranscript || finalText;
+    const timing = buildTranscriptTiming(sttResult, audioDurationSeconds);
+    const markedTranscript = formatTimedTranscript(timing) || finalText;
+    const completeness = buildTranscriptCompleteness(timing);
+    setTranscriptCoverage(el.audioTranscriptCoverage, completeness);
+    let displayTranscript = markedTranscript;
+    try {
+      const diarized = await diarizeTranscriptSemantically(markedTranscript, state.abortController.signal);
+      if (diarized && hasMinuteMarkers(diarized)) {
+        displayTranscript = diarized;
+      } else if (diarized) {
+        log('[llm] Interlocutores identificados sem preservar marcadores; mantendo transcrição marcada.');
+      }
+    } catch (diarizeErr) {
+      log(`[llm] Interlocutores não identificados; mantendo transcrição marcada: ${diarizeErr.message}`);
+    }
+    el.audioTranscriptOutput.value = displayTranscript;
     el.audioSummaryOutput.textContent = state.config.autoSummaryFromAudio
       ? 'Transcrição pronta. Gerando resumo...'
       : 'Transcrição pronta.';
-    addHistory(displayTranscript || finalText, 'dictate', rawText, { source: fromAutomation ? 'auto_calls' : 'file_upload', fileName, filePath });
+    addHistory(displayTranscript, 'dictate', rawText, {
+      source: fromAutomation ? 'auto_calls' : 'file_upload',
+      fileName,
+      filePath,
+      audioDurationSeconds: timing.durationSeconds,
+      transcriptCoveredSeconds: timing.coveredSeconds,
+      timestampSource: timing.timestampSource,
+      transcriptCompleteness: completeness.message,
+      transcriptCompletenessStatus: completeness.status,
+    });
     log(`[stt] Arquivo "${fileName}" transcrito com sucesso.`);
     if (state.config.autoSummaryFromAudio) {
       try {
@@ -2507,6 +2874,7 @@ function createEmptyCallGroup(name = 'Novo grupo de comparação') {
 function normalizeCallAnalysisItem(item) {
   const filePath = item?.filePath || item?.file_path || '';
   const fileName = item?.fileName || item?.file_name || filePath.split('/').pop()?.split('\\').pop() || 'audio';
+  const sourceFolderPath = item?.sourceFolderPath || item?.source_folder_path || parentFolderPath(filePath);
   const rawTranscript = item?.rawTranscript || item?.raw_transcript || '';
   const speakerTranscript = item?.speakerTranscript || item?.speaker_transcript || '';
   const transcriptSummary = item?.transcriptSummary || item?.transcript_summary || '';
@@ -2515,6 +2883,12 @@ function normalizeCallAnalysisItem(item) {
   const sentimentLabel = item?.sentimentLabel || item?.sentiment_label || '';
   const sentimentSummary = item?.sentimentSummary || item?.sentiment_summary || '';
   const sentimentPeople = item?.sentimentPeople || item?.sentiment_people || '';
+  const markedTranscript = item?.markedTranscript || item?.marked_transcript || '';
+  const transcriptCompleteness = item?.transcriptCompleteness || item?.transcript_completeness || '';
+  const transcriptCompletenessStatus = item?.transcriptCompletenessStatus || item?.transcript_completeness_status || '';
+  const timestampSource = item?.timestampSource || item?.timestamp_source || '';
+  const audioDurationSeconds = normalizeSeconds(item?.audioDurationSeconds ?? item?.audio_duration_seconds);
+  const transcriptCoveredSeconds = normalizeSeconds(item?.transcriptCoveredSeconds ?? item?.transcript_covered_seconds);
   const scoreValue = item?.score ?? null;
   const score = scoreValue === null || scoreValue === '' ? null : Number(scoreValue);
   const transcribedAt = item?.transcribedAt || item?.transcribed_at || '';
@@ -2523,10 +2897,17 @@ function normalizeCallAnalysisItem(item) {
     id: item?.id || callAnalysisId(filePath || fileName),
     filePath,
     fileName,
-    status: item?.status || (analysis ? 'Analisada' : rawTranscript || speakerTranscript ? 'Transcrita' : 'Pendente'),
+    sourceFolderPath,
+    status: item?.status || (analysis ? 'Analisada' : rawTranscript || speakerTranscript || markedTranscript ? 'Transcrita' : 'Pendente'),
     rawTranscript,
     speakerTranscript,
+    markedTranscript,
     transcriptSummary,
+    transcriptCompleteness,
+    transcriptCompletenessStatus,
+    timestampSource,
+    audioDurationSeconds,
+    transcriptCoveredSeconds,
     analysis,
     comparisonSummary,
     sentimentLabel,
@@ -2943,7 +3324,10 @@ function renderCallAnalysisList() {
       <label class="call-analysis-check table-check">
         <input type="checkbox" ${state.selectedCallAnalysisIds.has(item.id) ? 'checked' : ''} />
       </label>
-      <span class="call-analysis-file">${escapeHtml(item.fileName)}</span>
+      <span class="call-analysis-file">
+        ${escapeHtml(item.fileName)}
+        ${item.filePath ? `<br><small class="call-analysis-path">${escapeHtml(item.filePath)}</small>` : ''}
+      </span>
       <span>${callStatusBadge(item)}</span>
       <span class="call-analysis-status">${escapeHtml(item.transcriptSummary || transcriptPreview(item))}</span>
       <span class="call-analysis-status">${escapeHtml(item.comparisonSummary || item.analysis || 'Ainda sem comparação.')}</span>
@@ -2989,7 +3373,7 @@ function renderCallAnalysisList() {
 }
 
 function callStatusBadge(item) {
-  const isTranscribed = Boolean(item.rawTranscript || item.speakerTranscript);
+  const isTranscribed = Boolean(callTranscriptDisplay(item));
   const label = item.error ? 'Erro' : isTranscribed ? 'Transcrita' : 'Pendente';
   const klass = item.error ? 'bad' : isTranscribed ? 'good' : 'neutral';
   const errorHint = item.error ? `<br><small class="call-error-hint" title="${escapeHtml(item.error)}">${escapeHtml(item.error.length > 60 ? item.error.slice(0, 60) + '…' : item.error)}</small>` : '';
@@ -3028,9 +3412,21 @@ function sentimentChip(label, count) {
 }
 
 function transcriptPreview(item) {
-  const text = item.speakerTranscript || item.rawTranscript || '';
+  const text = callTranscriptDisplay(item);
   if (!text) return 'Ainda não transcrita.';
   return text.length > 120 ? `${text.slice(0, 120)}...` : text;
+}
+
+function callTranscriptDisplay(item) {
+  return item?.speakerTranscript || item?.markedTranscript || item?.rawTranscript || '';
+}
+
+function callTranscriptCoverage(item) {
+  if (!item?.transcriptCompleteness) return null;
+  return {
+    status: item.transcriptCompletenessStatus || (item.timestampSource === 'api' ? 'good' : 'warn'),
+    message: item.transcriptCompleteness,
+  };
 }
 
 function renderSelectedCallAnalysis() {
@@ -3039,12 +3435,14 @@ function renderSelectedCallAnalysis() {
     el.selectedCallStatus.textContent = 'Nenhuma ligação selecionada';
     el.callTranscriptOutput.textContent = 'A transcrição aparecerá aqui.';
     el.callAnalysisOutput.textContent = 'A análise aparecerá aqui.';
+    setTranscriptCoverage(el.callTranscriptCoverage, null, 'A conferência de duração aparecerá aqui.');
     if (el.callAudioPlayer) el.callAudioPlayer.style.display = 'none';
     return;
   }
 
   el.selectedCallStatus.textContent = `${item.status}${item.score != null ? ` • Nota ${item.score}` : ''}${item.sentimentLabel ? ` • Sentimento ${item.sentimentLabel}` : ''}${item.error ? ` • Erro: ${item.error}` : ''}`;
-  el.callTranscriptOutput.textContent = item.speakerTranscript || item.rawTranscript || (item.error ? `Falha na transcrição:\n${item.error}` : 'Ainda sem transcrição.');
+  el.callTranscriptOutput.textContent = callTranscriptDisplay(item) || (item.error ? `Falha na transcrição:\n${item.error}` : 'Ainda sem transcrição.');
+  setTranscriptCoverage(el.callTranscriptCoverage, callTranscriptCoverage(item), item.rawTranscript ? 'Transcrição sem conferência de duração salva.' : 'A conferência de duração aparecerá aqui.');
   el.callAnalysisOutput.textContent = item.analysis || 'A análise aparecerá aqui.';
 }
 
@@ -3064,10 +3462,17 @@ function upsertCallAnalysisFiles(filePaths) {
         id: callAnalysisId(filePath),
         filePath,
         fileName,
+        sourceFolderPath: parentFolderPath(filePath),
         status: 'Pendente',
         rawTranscript: '',
         speakerTranscript: '',
+        markedTranscript: '',
         transcriptSummary: '',
+        transcriptCompleteness: '',
+        transcriptCompletenessStatus: '',
+        timestampSource: '',
+        audioDurationSeconds: null,
+        transcriptCoveredSeconds: null,
         analysis: '',
         comparisonSummary: '',
         sentimentLabel: '',
@@ -3212,7 +3617,13 @@ async function transcribeCallAnalysisItem(item) {
   item.error = '';
   item.rawTranscript = '';
   item.speakerTranscript = '';
+  item.markedTranscript = '';
   item.transcriptSummary = '';
+  item.transcriptCompleteness = '';
+  item.transcriptCompletenessStatus = '';
+  item.timestampSource = '';
+  item.audioDurationSeconds = null;
+  item.transcriptCoveredSeconds = null;
   el.assistState.textContent = strings.processing;
   renderCallAnalysisList();
   refreshControls();
@@ -3230,17 +3641,38 @@ async function transcribeCallAnalysisItem(item) {
       webm: 'audio/webm',
     };
     const blob = new Blob([bytes], { type: mimeTypeByExt[fileExt] || 'audio/mpeg' });
-    const MAX_STT_BYTES = 25 * 1024 * 1024; // 25 MB — limite da API Whisper/OpenAI
     if (blob.size > MAX_STT_BYTES) {
       throw new Error(`Arquivo muito grande (${(blob.size / 1024 / 1024).toFixed(1)} MB). O limite da API é 25 MB. Comprima o áudio ou corte em partes menores.`);
     }
+    const audioDurationSeconds = await getAudioDurationSeconds(blob);
     state.recordingExt = fileExt;
-    item.rawTranscript = await transcribe(blob, state.abortController.signal);
+    const sttResult = await transcribeDetailed(blob, state.abortController.signal, { durationSeconds: audioDurationSeconds });
+    item.rawTranscript = sttResult.text;
     if (!item.rawTranscript) throw new Error('Transcrição vazia para a ligação.');
+    const timing = buildTranscriptTiming(sttResult, audioDurationSeconds);
+    const markedTranscript = formatTimedTranscript(timing) || item.rawTranscript;
+    const completeness = buildTranscriptCompleteness(timing);
+    item.markedTranscript = markedTranscript;
+    item.transcriptCompleteness = completeness.message;
+    item.transcriptCompletenessStatus = completeness.status;
+    item.timestampSource = timing.timestampSource;
+    item.audioDurationSeconds = timing.durationSeconds;
+    item.transcriptCoveredSeconds = timing.coveredSeconds;
 
     item.status = 'Separando interlocutores';
     renderCallAnalysisList();
-    item.speakerTranscript = await diarizeTranscriptSemantically(item.rawTranscript, state.abortController.signal);
+    try {
+      const diarized = await diarizeTranscriptSemantically(markedTranscript, state.abortController.signal);
+      if (diarized && hasMinuteMarkers(diarized)) {
+        item.speakerTranscript = diarized;
+      } else {
+        item.speakerTranscript = markedTranscript;
+        if (diarized) log(`[llm] Interlocutores de ${item.fileName} vieram sem marcadores; mantendo transcrição marcada.`);
+      }
+    } catch (diarizeErr) {
+      item.speakerTranscript = markedTranscript;
+      log(`[llm] Interlocutores não identificados em ${item.fileName}; mantendo transcrição marcada: ${diarizeErr.message}`);
+    }
     item.transcriptSummary = await summarizeCallTranscript(item.speakerTranscript || item.rawTranscript, state.abortController.signal);
     item.status = 'Transcrita';
     item.transcribedAt = new Date().toISOString();
@@ -3249,6 +3681,11 @@ async function transcribeCallAnalysisItem(item) {
       source: 'call_analysis',
       fileName: item.fileName,
       filePath: item.filePath,
+      audioDurationSeconds: timing.durationSeconds,
+      transcriptCoveredSeconds: timing.coveredSeconds,
+      timestampSource: timing.timestampSource,
+      transcriptCompleteness: completeness.message,
+      transcriptCompletenessStatus: completeness.status,
     });
     saveCurrentCallComparisonGroup({ silent: true });
     log(`[calls] Ligação "${item.fileName}" transcrita para análise.`);
@@ -3271,6 +3708,7 @@ async function diarizeTranscriptSemantically(transcript, signal) {
     'Organize a transcrição abaixo como uma conversa entre interlocutores, inferindo pela semântica e alternância de fala quem é Pessoa A e Pessoa B.\n' +
     'Use exatamente o formato "Pessoa A:" e "Pessoa B:".\n' +
     'Se houver mais pessoas, use Pessoa C, Pessoa D.\n' +
+    'Preserve qualquer marcador de tempo no formato [min XX | MM:SS] no início da frase correspondente.\n' +
     'Não invente informação que não esteja na conversa.\n\n' +
     `Transcrição bruta:\n${transcript}`;
   return await llmComplete(prompt, signal);
@@ -3326,10 +3764,10 @@ async function runCallComparisonForItems(items, script = scriptForCurrentGroup()
 }
 
 async function runCallComparisonItem(item, script, group) {
-  if (!item.speakerTranscript && !item.rawTranscript) {
+  if (!callTranscriptDisplay(item)) {
     await transcribeCallAnalysisItem(item);
   }
-  const transcript = item.speakerTranscript || item.rawTranscript;
+  const transcript = callTranscriptDisplay(item);
   if (!transcript) return;
 
   const strings = UI_STRINGS[state.config.uiLanguage] || UI_STRINGS.pt;
@@ -3585,9 +4023,9 @@ function renderCallGroupDashboard() {
   const ativaCount = calls.filter((c) => c.callDirection === 'ativa').length;
   const receptivaCount = calls.filter((c) => c.callDirection === 'receptiva').length;
 
-  const pendingCount = calls.filter((c) => !c.rawTranscript && !c.error).length;
+  const pendingCount = calls.filter((c) => !callTranscriptDisplay(c) && !c.error).length;
   const errorCount = calls.filter((c) => c.error).length;
-  const transcribedCount = calls.filter((c) => c.rawTranscript || c.speakerTranscript).length;
+  const transcribedCount = calls.filter((c) => callTranscriptDisplay(c)).length;
 
   if (!total) {
     dash.innerHTML = '<p class="muted" style="padding:8px 0">Nenhuma ligação carregada ainda.</p>';
@@ -3713,7 +4151,7 @@ function renderCallAnalyticView() {
 
   // --- KPIs ---
   const total = calls.length;
-  const transcribed = calls.filter((c) => c.rawTranscript || c.speakerTranscript).length;
+  const transcribed = calls.filter((c) => callTranscriptDisplay(c)).length;
   const analyzedCount = analyzed.length;
   const good = scored.filter((c) => Number(c.score) >= 70).length;
   const bad = scored.filter((c) => Number(c.score) < 70).length;
@@ -4318,7 +4756,8 @@ function renderFileTranscriptHistory() {
   const items = state.history.filter((item) => (
     item?.meta?.source === 'file_upload' ||
     item?.meta?.source === 'audio_summary' ||
-    item?.meta?.source === 'auto_calls'
+    item?.meta?.source === 'auto_calls' ||
+    item?.meta?.source === 'local_call_recording'
   ));
 
   el.fileTranscriptHistoryList.innerHTML = '';
@@ -4342,6 +4781,14 @@ function renderFileTranscriptHistory() {
       }
       el.audioTranscriptOutput.value = item.text;
       el.selectedAudioFile.textContent = item.meta?.fileName || 'Histórico selecionado.';
+      if (item.meta?.transcriptCompleteness) {
+        setTranscriptCoverage(el.audioTranscriptCoverage, {
+          status: item.meta?.transcriptCompletenessStatus || (item.meta?.timestampSource === 'api' ? 'good' : 'warn'),
+          message: item.meta.transcriptCompleteness,
+        });
+      } else {
+        setTranscriptCoverage(el.audioTranscriptCoverage, null, 'Histórico sem conferência de duração salva.');
+      }
     });
     el.fileTranscriptHistoryList.appendChild(row);
   });
@@ -4462,10 +4909,14 @@ async function safeJson(resp) {
 }
 
 function escapeHtml(text) {
-  return text
+  return trimString(text)
     .replaceAll('&', '&amp;')
     .replaceAll('<', '&lt;')
     .replaceAll('>', '&gt;')
     .replaceAll('"', '&quot;')
     .replaceAll("'", '&#039;');
+}
+
+function trimString(value) {
+  return String(value ?? '').trim();
 }

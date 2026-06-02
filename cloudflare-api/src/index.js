@@ -477,7 +477,7 @@ async function handleCallComparisonsPull(env, userId) {
   ).bind(userId).all();
 
   const recordingRows = await env.DB.prepare(
-    `SELECT id, group_id, file_name, file_path, status, is_transcribed, raw_transcript, speaker_transcript,
+    `SELECT id, group_id, file_name, file_path, source_folder_path, status, is_transcribed, raw_transcript, speaker_transcript,
             transcript_summary, analysis, comparison_summary, sentiment_label, sentiment_summary, sentiment_people,
             score, is_good, error, transcribed_at, analyzed_at,
             created_at, updated_at, deleted_at
@@ -577,16 +577,18 @@ async function handleCallComparisonsPush(env, userId, body) {
       const isGood = call?.is_good == null && score == null ? null : call?.is_good === false ? 0 : call?.is_good === true ? 1 : score >= 70 ? 1 : 0;
       const callCreatedAt = trimString(call?.created_at) || createdAt;
       const callUpdatedAt = trimString(call?.updated_at) || updatedAt;
+      const sourceFolderPath = trimString(call?.source_folder_path || call?.sourceFolderPath);
       await env.DB.prepare(
         `INSERT INTO call_recordings (
-           id, user_id, group_id, file_name, file_path, status, is_transcribed, raw_transcript, speaker_transcript,
+           id, user_id, group_id, file_name, file_path, source_folder_path, status, is_transcribed, raw_transcript, speaker_transcript,
            transcript_summary, analysis, comparison_summary, sentiment_label, sentiment_summary, sentiment_people,
            score, is_good, error, transcribed_at, analyzed_at, created_at, updated_at, call_motive, call_direction, deleted_at
-         ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22, ?23, ?24, NULL)
+         ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22, ?23, ?24, ?25, NULL)
          ON CONFLICT(id) DO UPDATE SET
            group_id = excluded.group_id,
            file_name = excluded.file_name,
            file_path = excluded.file_path,
+           source_folder_path = excluded.source_folder_path,
            status = excluded.status,
            is_transcribed = excluded.is_transcribed,
            raw_transcript = excluded.raw_transcript,
@@ -612,6 +614,7 @@ async function handleCallComparisonsPush(env, userId, body) {
         id,
         trimString(call?.file_name) || 'audio',
         trimString(call?.file_path),
+        sourceFolderPath,
         trimString(call?.status) || 'Pendente',
         isTranscribed,
         trimString(call?.raw_transcript),
