@@ -1,0 +1,56 @@
+name: Release Desktop
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  release-macos:
+    runs-on: [self-hosted, macOS]
+    defaults:
+      run:
+        shell: bash
+        working-directory: desktop
+    env:
+      APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
+      APPLE_API_ISSUER: ${{ secrets.APPLE_API_ISSUER }}
+      APPLE_API_KEY: ${{ secrets.APPLE_API_KEY }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+          cache-dependency-path: desktop/package-lock.json
+
+      - name: Ensure Rust targets
+        run: |
+          rustup target add aarch64-apple-darwin
+          rustup target add x86_64-apple-darwin
+
+      - name: Install desktop dependencies
+        run: npm ci
+
+      - name: Prepare notarization credentials file
+        env:
+          APPLE_API_KEY_P8_B64: ${{ secrets.APPLE_API_KEY_P8_B64 }}
+        run: |
+          key_path="$RUNNER_TEMP/AuthKey_${APPLE_API_KEY}.p8"
+          printf '%s' "$APPLE_API_KEY_P8_B64" | base64 --decode > "$key_path"
+          cat > .env.macos.local <<EOF
+          APPLE_SIGNING_IDENTITY=${APPLE_SIGNING_IDENTITY}
+          APPLE_API_ISSUER=${APPLE_API_ISSUER}
+          APPLE_API_KEY=${APPLE_API_KEY}
+          APPLE_API_KEY_PATH=${key_path}
+          EOF
+
+      - name: Build and publish signed release
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: npm run release:macos:github

@@ -54,6 +54,45 @@ npm run release:macos
 ```
 
 Esse comando valida as variaveis e executa o `tauri build` pronto para assinatura/notarizacao no macOS.
+Por padrao ele gera build `universal-apple-darwin`, compativel com Apple Silicon e Intel.
+
+Se quiser forcar um target especifico:
+
+```bash
+cd desktop
+TAURI_BUILD_TARGET=aarch64-apple-darwin npm run release:macos
+```
+
+## Publicar release no GitHub
+Para publicar o `.dmg` oficial no GitHub Releases:
+
+```bash
+cd desktop
+npm run publish:github
+```
+
+Esse comando:
+- localiza o `.dmg` da versao atual
+- gera arquivo `.sha256`
+- cria ou atualiza a release `v<versao>` no GitHub
+
+## Compatibilidade macOS
+- `aarch64` abre apenas em Macs Apple Silicon
+- `x86_64` abre apenas em Macs Intel
+- `universal-apple-darwin` abre nos dois
+
+Se outra maquina mostrar que o app "can't be opened", verifique primeiro:
+- se o build baixado bate com a arquitetura da maquina
+- se a maquina esta em macOS 11+ no caso de Apple Silicon
+
+O fluxo oficial deste projeto agora publica o build universal por padrao.
+
+Para fazer build oficial + publicacao em um comando:
+
+```bash
+cd desktop
+npm run release:macos:github
+```
 
 ## Auto-update
 O projeto já está com seção de updater no `src-tauri/tauri.conf.json`, porém `active: false`.

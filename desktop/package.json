@@ -10,7 +10,9 @@
     "preview": "vite preview",
     "tauri:dev": "tauri dev",
     "tauri:build": "tauri build",
-    "release:macos": "bash ./scripts/macos-release.sh"
+    "release:macos": "bash ./scripts/macos-release.sh",
+    "publish:github": "bash ./scripts/publish-github-release.sh",
+    "release:macos:github": "bash ./scripts/macos-release.sh && bash ./scripts/publish-github-release.sh"
   },
   "devDependencies": {
     "@tauri-apps/cli": "^2.0.0",
