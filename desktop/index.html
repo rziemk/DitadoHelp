@@ -29,6 +29,7 @@
 
         <div class="top-actions">
           <span id="userChip" class="user-chip">Offline</span>
+          <button id="topLogoutBtn" class="btn ghost hidden">Sair</button>
           <select id="uiLanguage" class="field compact">
             <option value="pt">🇧🇷 PT</option>
             <option value="en">🇺🇸 EN</option>
@@ -148,7 +149,6 @@
         <div class="switches">
           <label><input id="autoSyncCloud" type="checkbox" checked /> Sempre sincronizar automaticamente com a nuvem</label>
           <label><input id="sameKey" type="checkbox" checked /> Usar mesma STT key para LLM</label>
-          <label><input id="useFreeFallback" type="checkbox" checked /> Se não houver key, usar fallback simples</label>
         </div>
 
         <div class="popover-footer">
@@ -171,6 +171,62 @@
           <span id="recordingTag" class="recording-tag hidden">Gravando</span>
         </div>
       </section>
+
+      <div id="authGate" class="auth-gate hidden" role="dialog" aria-modal="true" aria-labelledby="authGateTitle">
+        <div class="auth-gate-card card">
+          <div class="auth-gate-brand">
+            <img src="/src/assets/scribeflowai-bubble.png" alt="Scribeflowai" class="auth-gate-logo" />
+            <div class="auth-gate-brandname"><span class="brand-main">ScribeFlow</span><span class="brand-accent">AI</span></div>
+          </div>
+          <div class="auth-gate-eyebrow">Acesso obrigatório</div>
+          <h2 id="authGateTitle">Entrar na sua conta</h2>
+          <p id="authGateMessage" class="auth-gate-message">Use seu email e senha para liberar o app.</p>
+
+          <div class="auth-gate-tabs" id="authGateTabs" role="tablist">
+            <button id="authGateTabSignin" class="auth-gate-tab active" type="button">Entrar</button>
+            <button id="authGateTabSignup" class="auth-gate-tab" type="button">Criar conta</button>
+          </div>
+
+          <div class="auth-gate-form">
+            <div id="authGateNameGroup" class="auth-gate-field hidden">
+              <label for="authGateName">Nome completo</label>
+              <input id="authGateName" class="field" placeholder="Seu nome completo" autocomplete="name" />
+            </div>
+            <div class="auth-gate-field">
+              <label for="authGateEmail">Email</label>
+              <input id="authGateEmail" class="field" type="email" placeholder="voce@dominio.com" autocomplete="email" />
+            </div>
+            <div id="authGatePasswordGroup" class="auth-gate-field">
+              <label for="authGatePassword">Senha</label>
+              <input id="authGatePassword" class="field" type="password" placeholder="Sua senha" autocomplete="current-password" />
+            </div>
+            <div id="authGatePhoneGroup" class="auth-gate-field hidden">
+              <label for="authGatePhone">Telefone (opcional)</label>
+              <input id="authGatePhone" class="field" placeholder="+55 11 99999-9999" autocomplete="tel" />
+            </div>
+            <div id="authGateLanguageGroup" class="auth-gate-field hidden">
+              <label for="authGateLanguage">Idioma da conta</label>
+              <select id="authGateLanguage" class="field">
+                <option value="pt">Português</option>
+                <option value="en">English</option>
+                <option value="es">Español</option>
+                <option value="fr">Français</option>
+                <option value="de">Deutsch</option>
+              </select>
+            </div>
+          </div>
+
+          <div class="auth-gate-actions">
+            <button id="authGateSubmit" class="btn primary auth-gate-submit">Entrar</button>
+            <button id="authGateResend" class="btn ghost hidden">Reenviar email</button>
+          </div>
+          <div class="auth-gate-links">
+            <button id="authGateForgot" class="auth-gate-link" type="button">Esqueceu a senha?</button>
+            <button id="authGateBackToLogin" class="auth-gate-link hidden" type="button">Voltar para o login</button>
+          </div>
+          <div id="authGateStatus" class="auth-gate-status">Entre ou crie sua conta para continuar.</div>
+        </div>
+      </div>
 
       <div id="noticeBar" class="notice hidden" role="status" aria-live="polite"></div>
 

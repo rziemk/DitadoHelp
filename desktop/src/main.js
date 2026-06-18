@@ -5,7 +5,7 @@ import { exists, mkdir, readDir, readFile, readTextFile, writeFile, writeTextFil
 
 const STORAGE_KEY = 'scribeflowai.desktop.config.v2';
 const LEGACY_STORAGE_KEYS = ['helpscribe.desktop.config.v2', 'helpscribe.desktop.config.v1'];
-const APP_VERSION = '0.1.72';
+const APP_VERSION = '0.1.74';
 const CALL_COMPARISON_GROUPS_KEY = 'scribeflowai.callComparisonGroups.v1';
 const CALL_COMPARISON_SCRIPTS_KEY = 'scribeflowai.callComparisonScripts.v1';
 const HISTORY_FILE_NAME = 'conversations.jsonl';
@@ -30,7 +30,6 @@ const defaultConfig = {
   translationLang: 'en',
   autoSyncCloud: true,
   sameKey: true,
-  useFreeFallback: true,
   appendDictation: false,
   historyDir: '',
   apiBaseUrl: 'https://api.scribeflowai.com',
@@ -180,6 +179,7 @@ const state = {
 const el = {
   readyChip: document.getElementById('readyChip'),
   userChip: document.getElementById('userChip'),
+  topLogoutBtn: document.getElementById('topLogoutBtn'),
   appVersion: document.getElementById('appVersion'),
   configBtn: document.getElementById('configBtn'),
   configPopover: document.getElementById('configPopover'),
@@ -226,7 +226,6 @@ const el = {
   configSections: Array.from(document.querySelectorAll('#configPopover details')),
   autoSyncCloud: document.getElementById('autoSyncCloud'),
   sameKey: document.getElementById('sameKey'),
-  useFreeFallback: document.getElementById('useFreeFallback'),
   testConnection: document.getElementById('testConnection'),
   uiLanguage: document.getElementById('uiLanguage'),
   btnDictate: document.getElementById('btnDictate'),
@@ -320,6 +319,26 @@ const el = {
   historyExport: document.getElementById('historyExport'),
   statusLog: document.getElementById('statusLog'),
   noticeBar: document.getElementById('noticeBar'),
+  authGate: document.getElementById('authGate'),
+  authGateTitle: document.getElementById('authGateTitle'),
+  authGateMessage: document.getElementById('authGateMessage'),
+  authGateTabSignin: document.getElementById('authGateTabSignin'),
+  authGateTabSignup: document.getElementById('authGateTabSignup'),
+  authGateNameGroup: document.getElementById('authGateNameGroup'),
+  authGateName: document.getElementById('authGateName'),
+  authGateEmail: document.getElementById('authGateEmail'),
+  authGatePasswordGroup: document.getElementById('authGatePasswordGroup'),
+  authGatePassword: document.getElementById('authGatePassword'),
+  authGatePhoneGroup: document.getElementById('authGatePhoneGroup'),
+  authGatePhone: document.getElementById('authGatePhone'),
+  authGateLanguageGroup: document.getElementById('authGateLanguageGroup'),
+  authGateLanguage: document.getElementById('authGateLanguage'),
+  authGateSubmit: document.getElementById('authGateSubmit'),
+  authGateResend: document.getElementById('authGateResend'),
+  authGateTabs: document.getElementById('authGateTabs'),
+  authGateForgot: document.getElementById('authGateForgot'),
+  authGateBackToLogin: document.getElementById('authGateBackToLogin'),
+  authGateStatus: document.getElementById('authGateStatus'),
   assistMode: document.getElementById('assistMode'),
   assistState: document.getElementById('assistState'),
   assistHint: document.getElementById('assistHint'),
@@ -353,6 +372,9 @@ async function boot() {
   await refreshLocalAudioSources();
   restartAutoImportMonitor();
   installTestHooks();
+  if (!isAuthenticated()) {
+    openAuthGate();
+  }
   log('[ui] Scribeflowai Desktop pronto.');
   if (!currentSttKey()) {
     showNotice('Configure a STT API Key em Configurações para iniciar a gravação.');
@@ -407,6 +429,182 @@ function openAccountAccess(focusTarget = 'email') {
   el.authEmail.focus();
 }
 
+let authGateMode = 'signin';
+
+function requireAuthenticatedAccess() {
+  if (isAuthenticated()) return true;
+  updateAuthGate();
+  return false;
+}
+
+function setAuthGateMode(mode) {
+  authGateMode = ['signup', 'forgot'].includes(mode) ? mode : 'signin';
+  const isSignup = authGateMode === 'signup';
+  const isForgot = authGateMode === 'forgot';
+  const isSignin = authGateMode === 'signin';
+  el.authGateTabSignin.classList.toggle('active', isSignin);
+  el.authGateTabSignup.classList.toggle('active', isSignup);
+  el.authGateTabs.classList.toggle('hidden', isForgot);
+  el.authGateNameGroup.classList.toggle('hidden', !isSignup);
+  el.authGatePhoneGroup.classList.toggle('hidden', !isSignup);
+  el.authGateLanguageGroup.classList.toggle('hidden', !isSignup);
+  el.authGatePasswordGroup.classList.toggle('hidden', !isSignin);
+  el.authGateForgot.classList.toggle('hidden', !isSignin);
+  el.authGateBackToLogin.classList.toggle('hidden', !isForgot);
+  if (isForgot) {
+    el.authGateTitle.textContent = 'Recuperar senha';
+    el.authGateMessage.textContent = 'Enviaremos um link para o seu email. Ao confirmar, você entra e pode definir uma nova senha.';
+    el.authGateSubmit.textContent = 'Enviar link de recuperação';
+  } else if (isSignup) {
+    el.authGateTitle.textContent = 'Criar sua conta';
+    el.authGateMessage.textContent = 'Crie a conta e valide seu email uma vez. Depois disso, você entra direto.';
+    el.authGateSubmit.textContent = 'Criar conta e validar email';
+  } else {
+    el.authGateTitle.textContent = 'Entrar na sua conta';
+    el.authGateMessage.textContent = 'Use seu email e senha para liberar o app.';
+    el.authGateSubmit.textContent = 'Entrar';
+  }
+}
+
+function setAuthGateStatus(message, isError = false) {
+  el.authGateStatus.textContent = message;
+  el.authGateStatus.classList.toggle('error', isError);
+}
+
+function openAuthGate() {
+  setAuthGateMode(state.config.authHasPassword ? 'signin' : 'signup');
+  el.authGateEmail.value = state.config.authEmail || '';
+  el.authGateName.value = state.config.authName || '';
+  el.authGatePhone.value = state.config.authPhone || '';
+  el.authGateLanguage.value = state.config.authLanguage || 'pt';
+  updateAuthGate();
+  setTimeout(() => {
+    const firstEmpty = !el.authGateEmail.value.trim()
+      ? el.authGateEmail
+      : (authGateMode === 'signup' ? el.authGateName : el.authGatePassword);
+    firstEmpty?.focus();
+  }, 60);
+}
+
+async function submitAuthGate(forceResend = false) {
+  try {
+    if (authGateMode === 'forgot') {
+      const email = el.authGateEmail.value.trim();
+      if (!email) {
+        setAuthGateStatus('Informe seu email para recuperar a senha.', true);
+        el.authGateEmail.focus();
+        return;
+      }
+      await withButtonLoading(el.authGateSubmit, 'Enviando...', async () => {
+        await requestPasswordReset(email);
+      });
+      setAuthGateMode('signin');
+      el.authGateEmail.value = email;
+      setAuthGateStatus(`Enviamos um email para ${email} com o link de redefinir senha. Após criar a nova senha, entre com ela aqui.`);
+      return;
+    }
+    if (authGateMode === 'signup' || forceResend) {
+      const name = el.authGateName.value.trim();
+      const email = el.authGateEmail.value.trim();
+      if (!name) {
+        setAuthGateStatus('Informe seu nome completo.', true);
+        el.authGateName.focus();
+        return;
+      }
+      if (!email) {
+        setAuthGateStatus('Informe seu email.', true);
+        el.authGateEmail.focus();
+        return;
+      }
+      el.authName.value = name;
+      el.authEmail.value = email;
+      el.authPhone.value = el.authGatePhone.value.trim();
+      el.authLanguage.value = el.authGateLanguage.value;
+      await withButtonLoading(el.authGateSubmit, 'Enviando...', async () => {
+        await requestMagicLink();
+      });
+      setAuthGateStatus(`Email de validação enviado para ${email}. Abra o link para concluir o login.`);
+    } else {
+      const email = el.authGateEmail.value.trim();
+      const password = el.authGatePassword.value.trim();
+      if (!email) {
+        setAuthGateStatus('Informe seu email.', true);
+        el.authGateEmail.focus();
+        return;
+      }
+      if (!password) {
+        setAuthGateStatus('Informe sua senha.', true);
+        el.authGatePassword.focus();
+        return;
+      }
+      el.authEmail.value = email;
+      el.authPassword.value = password;
+      await withButtonLoading(el.authGateSubmit, 'Entrando...', async () => {
+        await loginWithPassword();
+      });
+      if (!isAuthenticated()) {
+        setAuthGateStatus('Não foi possível entrar. Confira seu email e senha.', true);
+      }
+    }
+  } catch (err) {
+    handleAuthGateError(err);
+  }
+}
+
+function handleAuthGateError(err) {
+  const code = err?.code || '';
+  if (code === 'account_exists') {
+    const email = el.authGateEmail.value.trim();
+    setAuthGateMode('signin');
+    el.authGateEmail.value = email;
+    setAuthGateStatus('Esse email já tem conta. Entre com sua senha ou use "Esqueceu a senha?".', true);
+    el.authGatePassword.focus();
+    return;
+  }
+  if (code === 'account_not_found') {
+    setAuthGateStatus('Não encontramos uma conta com esse email. Crie uma conta primeiro.', true);
+    return;
+  }
+  if (code === 'password_not_configured') {
+    setAuthGateStatus('Esta conta ainda não tem senha. Use "Esqueceu a senha?" para definir uma.', true);
+    return;
+  }
+  if (code === 'email_not_verified') {
+    setAuthGateStatus('Valide seu email antes de entrar. Confira o link enviado para sua caixa.', true);
+    return;
+  }
+  if (code === 'invalid_credentials') {
+    setAuthGateStatus('Email ou senha incorretos. Tente novamente ou recupere a senha.', true);
+    return;
+  }
+  if (code === 'not_found') {
+    setAuthGateStatus('Recurso indisponível no servidor agora. Tente novamente em instantes.', true);
+    return;
+  }
+  setAuthGateStatus(err?.message || 'Falha ao autenticar.', true);
+}
+
+async function requestPasswordReset(email) {
+  await apiRequest('/auth/request-password-reset', {
+    method: 'POST',
+    body: JSON.stringify({ email }),
+  });
+}
+
+function updateAuthGate() {
+  const locked = !isAuthenticated();
+  document.body.classList.toggle('auth-required', locked);
+  el.authGate.classList.toggle('hidden', !locked);
+  if (!locked) return;
+
+  const waitingForEmail = Boolean(state.authRequestId);
+  el.authGateResend.classList.toggle('hidden', !waitingForEmail);
+  if (waitingForEmail) {
+    const email = el.authGateEmail.value.trim() || state.config.authEmail || 'seu email';
+    setAuthGateStatus(`Validação enviada para ${email}. Abra o link no email para desbloquear o app.`);
+  }
+}
+
 function wireEvents() {
   el.configBtn.addEventListener('click', (ev) => {
     ev.stopPropagation();
@@ -419,6 +617,33 @@ function wireEvents() {
 
   el.userChip.addEventListener('click', () => {
     openAccountAccess(isAuthenticated() || state.config.authHasPassword ? 'password' : 'email');
+  });
+
+  el.topLogoutBtn.addEventListener('click', () => {
+    logout();
+  });
+
+  el.authGateTabSignin.addEventListener('click', () => setAuthGateMode('signin'));
+  el.authGateTabSignup.addEventListener('click', () => setAuthGateMode('signup'));
+  el.authGateForgot.addEventListener('click', () => {
+    setAuthGateMode('forgot');
+    setAuthGateStatus('Informe o email da conta para receber o link de recuperação.');
+    el.authGateEmail.focus();
+  });
+  el.authGateBackToLogin.addEventListener('click', () => {
+    setAuthGateMode('signin');
+    setAuthGateStatus('Entre com seu email e senha.');
+    el.authGatePassword.focus();
+  });
+  el.authGateSubmit.addEventListener('click', () => { void submitAuthGate(); });
+  el.authGateResend.addEventListener('click', () => { void submitAuthGate(true); });
+  [el.authGateEmail, el.authGatePassword, el.authGateName, el.authGatePhone].forEach((input) => {
+    input.addEventListener('keydown', (ev) => {
+      if (ev.key === 'Enter') {
+        ev.preventDefault();
+        void submitAuthGate();
+      }
+    });
   });
 
   document.addEventListener('click', (ev) => {
@@ -824,7 +1049,6 @@ function syncConfigToUI() {
   el.translationLangTop.value = state.config.translationLang;
   el.autoSyncCloud.checked = state.config.autoSyncCloud;
   el.sameKey.checked = state.config.sameKey;
-  el.useFreeFallback.checked = state.config.useFreeFallback;
   el.appendDictation.checked = state.config.appendDictation;
   el.historyDir.value = state.config.historyDir || 'Documentos/Scribeflowai (padrao)';
   el.apiBaseUrl.value = state.config.apiBaseUrl || defaultConfig.apiBaseUrl;
@@ -925,7 +1149,6 @@ function saveFromUI() {
     translationLang: el.translationLang.value,
     autoSyncCloud: el.autoSyncCloud.checked,
     sameKey: el.sameKey.checked,
-    useFreeFallback: el.useFreeFallback.checked,
     appendDictation: el.appendDictation.checked,
     historyDir: state.config.historyDir || '',
     apiBaseUrl: el.apiBaseUrl.value.trim() || defaultConfig.apiBaseUrl,
@@ -1146,7 +1369,10 @@ function refreshAuthUI() {
   el.setPassword.textContent = hasPassword ? 'Alterar senha' : 'Salvar senha';
   el.resendMagicLink.classList.toggle('hidden', !waitingForEmail);
   el.logoutBtn.classList.toggle('hidden', !email);
+  el.topLogoutBtn.classList.toggle('hidden', !email);
   el.syncNow.disabled = !email;
+  updateAuthGate();
+  refreshControls();
 }
 
 async function apiRequest(path, options = {}) {
@@ -1162,7 +1388,11 @@ async function apiRequest(path, options = {}) {
   const contentType = response.headers.get('content-type') || '';
   const payload = contentType.includes('application/json') ? await response.json() : await response.text();
   if (!response.ok) {
-    throw new Error(payload?.message || payload?.error || `Falha HTTP ${response.status}`);
+    const error = new Error(payload?.message || payload?.error || `Falha HTTP ${response.status}`);
+    error.code = payload?.error || '';
+    error.status = response.status;
+    error.payload = payload;
+    throw error;
   }
   return payload;
 }
@@ -1583,7 +1813,6 @@ function buildSettingsPayload() {
       translation_lang: state.config.translationLang,
       auto_sync_cloud: state.config.autoSyncCloud,
       same_key: state.config.sameKey,
-      use_free_fallback: state.config.useFreeFallback,
       append_dictation: state.config.appendDictation,
       ui_language: state.config.uiLanguage,
     },
@@ -1606,7 +1835,6 @@ function applyRemoteSettings(payload) {
     state.config.translationLang = settings.translation_lang || state.config.translationLang;
     state.config.autoSyncCloud = typeof settings.auto_sync_cloud === 'boolean' ? settings.auto_sync_cloud : state.config.autoSyncCloud;
     state.config.sameKey = typeof settings.same_key === 'boolean' ? settings.same_key : state.config.sameKey;
-    state.config.useFreeFallback = typeof settings.use_free_fallback === 'boolean' ? settings.use_free_fallback : state.config.useFreeFallback;
     state.config.appendDictation = typeof settings.append_dictation === 'boolean' ? settings.append_dictation : state.config.appendDictation;
     state.config.uiLanguage = settings.ui_language || state.config.uiLanguage;
   }
@@ -1821,6 +2049,9 @@ async function validateKey() {
 }
 
 async function toggleRecord(mode) {
+  if (!requireAuthenticatedAccess('Crie sua conta e faça login antes de iniciar uma gravação.')) {
+    return;
+  }
   if (state.isProcessing) {
     log('[proc] Aguarde fim do processamento ou clique em Parar.');
     return;
@@ -1935,16 +2166,10 @@ async function handleRecordingStopped() {
     }
 
     let finalText = sourceText;
-    try {
-      if (state.mode === 'rewrite') finalText = rewriteSmartLocal(sourceText);
-      if (state.mode === 'rewrite_llm') finalText = await rewriteText(sourceText, state.abortController.signal);
-      if (state.mode === 'translate') finalText = await translateText(sourceText, state.config.translationLang, state.abortController.signal);
-      if (state.mode === 'codex') finalText = await codexPrompt(sourceText, state.abortController.signal);
-    } catch (err) {
-      finalText = sourceText;
-      showNotice(`Transcrição feita, mas o processamento ${modeLabel(state.mode)} falhou. Mantive o texto bruto no box.`, 'error');
-      log(`[proc] Falha no processamento ${state.mode}; usando transcrição bruta: ${err.message}`);
-    }
+    if (state.mode === 'rewrite') finalText = rewriteSmartLocal(sourceText);
+    if (state.mode === 'rewrite_llm') finalText = await rewriteText(sourceText, state.abortController.signal);
+    if (state.mode === 'translate') finalText = await translateText(sourceText, state.config.translationLang, state.abortController.signal);
+    if (state.mode === 'codex') finalText = await codexPrompt(sourceText, state.abortController.signal);
 
     finalText = ensureFinalText(finalText, sourceText);
 
@@ -4493,41 +4718,35 @@ function languageName(code) {
 }
 
 async function rewriteText(text, signal) {
-  try {
-    return await llmComplete(
-      [
-        'Você é um editor sênior de ditado em português (pt-BR).',
-        'Tarefa: transformar a fala transcrita em um texto final claro, lógico, natural e pronto para uso.',
-        '',
-        'Regras obrigatórias:',
-        '1) Preserve o significado e o contexto principal.',
-        '2) Remova repetições, vícios de fala, hesitações e trechos incoerentes.',
-        '3) Organize o raciocínio em uma sequência fluida de ideias.',
-        '4) Se houver mudança de ideia no meio da fala, mantenha a versão final/intenção mais recente.',
-        '5) Reestruture frases quebradas para melhor legibilidade, sem mudar a intenção.',
-        '6) Corrija gramática, pontuação e concordância.',
-        '7) Não invente fatos. Se algo ficar ambíguo, escolha a interpretação mais provável pelo contexto.',
-        '8) Entregue somente o texto final (sem explicações, sem tópicos extras).',
-        '9) Remova instruções meta dirigidas ao assistente/editor (ex.: "escreve X do jeito correto", "corrige esse termo", "troca tal palavra"), a menos que façam parte do conteúdo final pretendido.',
-        '',
-        'Tom de saída:',
-        '- Direto, claro, natural e profissional.',
-        '- Frases enxutas, evitando redundância.',
-        '',
-        'Importante:',
-        '- Não descreva o que você fez.',
-        '- Não inclua títulos, listas ou prefácios.',
-        '',
-        'Texto transcrito:',
-        text,
-      ].join('\n'),
-      signal,
-    );
-  } catch (err) {
-    if (!state.config.useFreeFallback) throw err;
-    log('[llm] Sem chave válida. Usando fallback local de reescrita.');
-    return text.replace(/\s+/g, ' ').trim();
-  }
+  return await llmComplete(
+    [
+      'Você é um editor sênior de ditado em português (pt-BR).',
+      'Tarefa: transformar a fala transcrita em um texto final claro, lógico, natural e pronto para uso.',
+      '',
+      'Regras obrigatórias:',
+      '1) Preserve o significado e o contexto principal.',
+      '2) Remova repetições, vícios de fala, hesitações e trechos incoerentes.',
+      '3) Organize o raciocínio em uma sequência fluida de ideias.',
+      '4) Se houver mudança de ideia no meio da fala, mantenha a versão final/intenção mais recente.',
+      '5) Reestruture frases quebradas para melhor legibilidade, sem mudar a intenção.',
+      '6) Corrija gramática, pontuação e concordância.',
+      '7) Não invente fatos. Se algo ficar ambíguo, escolha a interpretação mais provável pelo contexto.',
+      '8) Entregue somente o texto final (sem explicações, sem tópicos extras).',
+      '9) Remova instruções meta dirigidas ao assistente/editor (ex.: "escreve X do jeito correto", "corrige esse termo", "troca tal palavra"), a menos que façam parte do conteúdo final pretendido.',
+      '',
+      'Tom de saída:',
+      '- Direto, claro, natural e profissional.',
+      '- Frases enxutas, evitando redundância.',
+      '',
+      'Importante:',
+      '- Não descreva o que você fez.',
+      '- Não inclua títulos, listas ou prefácios.',
+      '',
+      'Texto transcrito:',
+      text,
+    ].join('\n'),
+    signal,
+  );
 }
 
 function rewriteSmartLocal(text) {
@@ -4561,44 +4780,14 @@ function rewriteSmartLocal(text) {
 
 async function translateText(text, langCode, signal) {
   const target = languageName(langCode);
-  try {
-    return await llmComplete(`Traduza para ${target}, mantendo contexto e tom:\n\n${text}`, signal);
-  } catch (err) {
-    if (!state.config.useFreeFallback) throw err;
-    log('[llm] Sem chave válida. Usando fallback local para tradução.');
-    return `[Tradução para ${target} indisponível sem chave LLM]\n\n${text}`;
-  }
+  return await llmComplete(`Traduza para ${target}, mantendo contexto e tom:\n\n${text}`, signal);
 }
 
 async function codexPrompt(text, signal) {
-  try {
-    return await llmComplete(
-      `Transforme o ditado abaixo em um prompt técnico no estilo Codex, com seções Objetivo, Contexto, Requisitos, Critérios de aceite e Passos sugeridos:\n\n${text}`,
-      signal,
-    );
-  } catch (err) {
-    if (!state.config.useFreeFallback) throw err;
-    log('[llm] Sem chave válida. Usando template local de prompt.');
-    return [
-      'Objetivo:',
-      text,
-      '',
-      'Contexto:',
-      'Descreva o ambiente e restrições técnicas.',
-      '',
-      'Requisitos:',
-      'Liste requisitos funcionais e não funcionais.',
-      '',
-      'Critérios de aceite:',
-      'Defina como validar o resultado.',
-      '',
-      'Passos sugeridos:',
-      '1. Planejar',
-      '2. Implementar',
-      '3. Testar',
-      '4. Entregar',
-    ].join('\n');
-  }
+  return await llmComplete(
+    `Transforme o ditado abaixo em um prompt técnico no estilo Codex, com seções Objetivo, Contexto, Requisitos, Critérios de aceite e Passos sugeridos:\n\n${text}`,
+    signal,
+  );
 }
 
 function setActiveMode(mode) {
@@ -4620,6 +4809,10 @@ function setActiveMode(mode) {
 }
 
 function setWorkspaceView(view) {
+  if (!isAuthenticated() && view !== 'main') {
+    requireAuthenticatedAccess('Faça login antes de acessar os fluxos do aplicativo.');
+    return;
+  }
   const isMain = view === 'main';
   el.workflowPanel.classList.toggle('hidden', isMain);
   el.dockGrid.classList.toggle('hidden', !isMain);
@@ -4637,16 +4830,20 @@ function setWorkspaceView(view) {
 }
 
 function refreshControls() {
+  const locked = !isAuthenticated();
   const busy = state.isRecording || state.isProcessing || state.isStartingRecording || state.isLocalCallRecording;
-  el.btnDictate.disabled = state.isProcessing || state.isStartingRecording;
-  el.btnRewrite.disabled = state.isProcessing || state.isStartingRecording;
-  el.btnRewriteLlm.disabled = state.isProcessing || state.isStartingRecording;
-  el.btnTranslate.disabled = state.isProcessing || state.isStartingRecording;
-  el.btnCodex.disabled = state.isProcessing || state.isStartingRecording;
-  el.applyTextAction.disabled = busy;
-  el.chatAsk.disabled = busy;
+  el.btnDictate.disabled = locked || state.isProcessing || state.isStartingRecording;
+  el.btnRewrite.disabled = locked || state.isProcessing || state.isStartingRecording;
+  el.btnRewriteLlm.disabled = locked || state.isProcessing || state.isStartingRecording;
+  el.btnTranslate.disabled = locked || state.isProcessing || state.isStartingRecording;
+  el.btnCodex.disabled = locked || state.isProcessing || state.isStartingRecording;
+  el.btnFileTranscriptMode.disabled = locked;
+  el.btnAutoCallsMode.disabled = locked;
+  el.btnCallAnalysisMode.disabled = locked;
+  el.applyTextAction.disabled = locked || busy;
+  el.chatAsk.disabled = locked || busy;
   el.stopBtn.disabled = !(state.isRecording || state.isProcessing || state.isLocalCallRecording);
-  el.startLocalCallRecordingBtn.disabled = state.isRecording || state.isProcessing || state.isStartingRecording || state.isLocalCallRecording;
+  el.startLocalCallRecordingBtn.disabled = locked || state.isRecording || state.isProcessing || state.isStartingRecording || state.isLocalCallRecording;
   el.stopLocalCallRecordingBtn.disabled = !state.isLocalCallRecording;
   if (el.recordingTag) {
     const showRecording = state.isRecording || state.isStartingRecording || state.isLocalCallRecording;

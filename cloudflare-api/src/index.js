@@ -43,6 +43,25 @@ async function router(request, env) {
     return await handleMagicLinkRequest(body, env);
   }
 
+  if (pathname === '/auth/request-password-reset' && request.method === 'POST') {
+    const body = await request.json();
+    return await handlePasswordResetRequest(body, env);
+  }
+
+  if (pathname === '/auth/reset-password' && request.method === 'GET') {
+    const token = url.searchParams.get('token') || '';
+    return withCors(
+      new Response(buildResetPasswordFormHtml(token), {
+        status: 200,
+        headers: { 'content-type': 'text/html; charset=utf-8' },
+      }),
+    );
+  }
+
+  if (pathname === '/auth/reset-password' && request.method === 'POST') {
+    return await handlePasswordResetConfirm(request, env);
+  }
+
   if (pathname === '/auth/request-status' && request.method === 'GET') {
     const requestId = url.searchParams.get('request_id') || '';
     return await handleAuthRequestStatus(requestId, env);
@@ -176,8 +195,164 @@ async function handleMagicLinkRequest(body, env) {
   if (!displayName) {
     return json({ error: 'missing_display_name' }, 400);
   }
-  const user = await findOrCreateUser(env, { email, displayName, phone, uiLanguage });
 
+  const existing = await env.DB.prepare(
+    `SELECT id, email_verified_at, password_hash FROM users WHERE email = ?1`,
+  ).bind(email).first();
+  if (existing && existing.email_verified_at) {
+    return json(
+      {
+        error: 'account_exists',
+        message: 'account_exists',
+        has_password: Boolean(existing.password_hash),
+      },
+      409,
+    );
+  }
+
+  const user = await findOrCreateUser(env, { email, displayName, phone, uiLanguage });
+  const issued = await issueAuthMagicLink(env, { user, deviceName, redirectUri });
+
+  const response = {
+    ok: true,
+    email,
+    request_id: issued.request_id,
+    expires_at: issued.expires_at,
+    delivery: issued.delivery,
+  };
+
+  if (env.DEBUG_MAGIC_LINKS === '1') {
+    response.debug = { token: issued.token, magic_link: issued.magic_link, verify_url: issued.verify_url };
+  }
+
+  return json(response);
+}
+
+async function handlePasswordResetRequest(body, env) {
+  const email = normalizeEmail(body?.email);
+  if (!email) {
+    return json({ error: 'invalid_email' }, 400);
+  }
+
+  const user = await env.DB.prepare(
+    `SELECT id, email FROM users WHERE email = ?1`,
+  ).bind(email).first();
+  if (!user) {
+    return json({ error: 'account_not_found', message: 'account_not_found' }, 404);
+  }
+
+  const issued = await issuePasswordResetLink(env, { user });
+
+  const response = {
+    ok: true,
+    email,
+    purpose: 'password_reset',
+    expires_at: issued.expires_at,
+    delivery: issued.delivery,
+  };
+
+  if (env.DEBUG_MAGIC_LINKS === '1') {
+    response.debug = { token: issued.token, reset_url: issued.reset_url };
+  }
+
+  return json(response);
+}
+
+async function issuePasswordResetLink(env, { user }) {
+  const token = randomToken();
+  const tokenHash = await sha256(token);
+  const createdAt = nowIso();
+  const expiresAt = addMinutes(
+    createdAt,
+    Number(env.PASSWORD_RESET_TTL_MINUTES || env.MAGIC_LINK_TTL_MINUTES || '20'),
+  );
+  const linkId = crypto.randomUUID();
+
+  await env.DB.prepare(
+    `INSERT INTO magic_links (id, user_id, email, token_hash, device_name, redirect_uri, expires_at, created_at)
+     VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)`,
+  ).bind(linkId, user.id, user.email, tokenHash, 'password-reset', '', expiresAt, createdAt).run();
+
+  const resetUrl = `${env.API_BASE_URL}/auth/reset-password?token=${encodeURIComponent(token)}`;
+  const delivery = await sendPasswordResetEmail(env, {
+    email: user.email,
+    resetUrl,
+    appName: env.APP_NAME || 'Scribeflowai',
+  });
+
+  return { token, reset_url: resetUrl, expires_at: expiresAt, delivery };
+}
+
+async function handlePasswordResetConfirm(request, env) {
+  const contentType = request.headers.get('content-type') || '';
+  const wantsHtml = !contentType.includes('application/json');
+
+  let token = '';
+  let password = '';
+  let confirmPassword = '';
+  if (contentType.includes('application/json')) {
+    const body = await request.json().catch(() => ({}));
+    token = trimString(body?.token);
+    password = trimString(body?.password);
+    confirmPassword = trimString(body?.confirm_password);
+  } else {
+    const form = await request.formData();
+    token = trimString(form.get('token'));
+    password = trimString(form.get('password'));
+    confirmPassword = trimString(form.get('confirm_password'));
+  }
+
+  const respond = (status, code, message, ok = false) => {
+    if (wantsHtml) {
+      const html = ok ? buildResetPasswordResultHtml(message) : buildResetPasswordFormHtml(token, message);
+      return withCors(new Response(html, { status, headers: { 'content-type': 'text/html; charset=utf-8' } }));
+    }
+    return json(ok ? { ok: true, password_reset: true } : { error: code, message: code }, status);
+  };
+
+  if (!token) {
+    return respond(400, 'missing_token', 'Link invalido. Solicite a recuperacao de senha novamente.');
+  }
+  if (password.length < 6) {
+    return respond(400, 'password_too_short', 'A senha precisa ter ao menos 6 caracteres.');
+  }
+  if (password !== confirmPassword) {
+    return respond(400, 'password_mismatch', 'As senhas nao conferem. Tente novamente.');
+  }
+
+  const tokenHash = await sha256(token);
+  const link = await env.DB.prepare(
+    `SELECT id, user_id, expires_at, consumed_at FROM magic_links WHERE token_hash = ?1`,
+  ).bind(tokenHash).first();
+
+  if (!link) {
+    return respond(400, 'invalid_token', 'Link invalido. Solicite a recuperacao de senha novamente.');
+  }
+  if (link.consumed_at) {
+    return respond(400, 'token_already_used', 'Este link ja foi usado. Solicite um novo.');
+  }
+  if (new Date(link.expires_at).getTime() < Date.now()) {
+    return respond(400, 'token_expired', 'Este link expirou. Solicite a recuperacao de senha novamente.');
+  }
+
+  const salt = randomToken();
+  const passwordHash = await hashPassword(password, salt);
+  const now = nowIso();
+  await env.DB.batch([
+    env.DB.prepare(
+      `UPDATE users
+       SET password_hash = ?1, password_salt = ?2, updated_at = ?3, email_verified_at = COALESCE(email_verified_at, ?3)
+       WHERE id = ?4`,
+    ).bind(passwordHash, salt, now, link.user_id),
+    env.DB.prepare(
+      `UPDATE magic_links SET consumed_at = ?1 WHERE id = ?2`,
+    ).bind(now, link.id),
+  ]);
+
+  return respond(200, 'ok', 'Senha redefinida com sucesso. Volte ao app Scribeflowai e entre com a nova senha.', true);
+}
+
+async function issueAuthMagicLink(env, { user, deviceName = '', redirectUri = '' }) {
   const token = randomToken();
   const tokenHash = await sha256(token);
   const createdAt = nowIso();
@@ -188,12 +363,12 @@ async function handleMagicLinkRequest(body, env) {
   await env.DB.prepare(
     `INSERT INTO auth_requests (id, user_id, email, created_at, expires_at)
      VALUES (?1, ?2, ?3, ?4, ?5)`,
-  ).bind(authRequestId, user.id, email, createdAt, expiresAt).run();
+  ).bind(authRequestId, user.id, user.email, createdAt, expiresAt).run();
 
   await env.DB.prepare(
     `INSERT INTO magic_links (id, user_id, email, token_hash, device_name, redirect_uri, expires_at, created_at, auth_request_id)
      VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)`,
-  ).bind(linkId, user.id, email, tokenHash, deviceName, redirectUri, expiresAt, createdAt, authRequestId).run();
+  ).bind(linkId, user.id, user.email, tokenHash, deviceName, redirectUri, expiresAt, createdAt, authRequestId).run();
 
   const verifyUrl = `${env.API_BASE_URL}/auth/verify?token=${encodeURIComponent(token)}`;
   const appUrl = env.APP_URL || '';
@@ -203,25 +378,20 @@ async function handleMagicLinkRequest(body, env) {
     : verifyUrl;
 
   const delivery = await sendMagicLinkEmail(env, {
-    email,
+    email: user.email,
     magicLink: finalLink,
     verifyUrl,
     appName: env.APP_NAME || 'Scribeflowai',
   });
 
-  const response = {
-    ok: true,
-    email,
+  return {
     request_id: authRequestId,
     expires_at: expiresAt,
     delivery,
+    verify_url: verifyUrl,
+    magic_link: finalLink,
+    token,
   };
-
-  if (env.DEBUG_MAGIC_LINKS === '1') {
-    response.debug = { token, magic_link: finalLink, verify_url: verifyUrl };
-  }
-
-  return json(response);
 }
 
 async function handleAuthRequestStatus(requestId, env) {
@@ -969,7 +1139,41 @@ async function sendMagicLinkEmail(env, { email, magicLink, verifyUrl, appName })
     throw new Error(`Failed to send email: ${text}`);
   }
 
-  return { provider: 'resend', status: 'sent' };
+  const data = await response.json().catch(() => ({}));
+  return { provider: 'resend', status: 'sent', id: data?.id || '' };
+}
+
+async function sendPasswordResetEmail(env, { email, resetUrl, appName }) {
+  if (!env.RESEND_API_KEY || !env.MAIL_FROM) {
+    return { provider: 'debug', status: 'not_configured', reset_url: resetUrl };
+  }
+
+  const response = await fetch('https://api.resend.com/emails', {
+    method: 'POST',
+    headers: {
+      Authorization: `Bearer ${env.RESEND_API_KEY}`,
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({
+      from: env.MAIL_FROM,
+      to: [email],
+      subject: `Redefinir senha do ${appName}`,
+      html: `<p>Recebemos um pedido para redefinir a senha da sua conta no ${escapeHtml(appName)}.</p>
+<p>Clique no botao abaixo para criar uma nova senha:</p>
+<p><a href="${resetUrl}" style="display:inline-block;padding:10px 18px;background:#2563eb;color:#ffffff;border-radius:8px;text-decoration:none;font-weight:bold;">Redefinir senha</a></p>
+<p>Ou copie e cole este link no navegador:</p>
+<p><a href="${resetUrl}">${resetUrl}</a></p>
+<p>Se voce nao pediu isso, ignore este email. Sua senha atual continua valida.</p>`,
+    }),
+  });
+
+  if (!response.ok) {
+    const text = await response.text();
+    throw new Error(`Failed to send email: ${text}`);
+  }
+
+  const data = await response.json().catch(() => ({}));
+  return { provider: 'resend', status: 'sent', id: data?.id || '' };
 }
 
 async function encryptSecret(env, plaintext) {
@@ -1140,6 +1344,68 @@ function buildVerificationHtml(payload) {
     <div class="card">
       <h1>Login confirmado</h1>
       <p>O login foi confirmado. Volte ao app Scribeflowai. A sessao sera detectada automaticamente.</p>
+    </div>
+  </body>
+</html>`;
+}
+
+function buildResetPasswordFormHtml(token, errorMessage = '') {
+  const safeToken = escapeHtml(token);
+  const errorBlock = errorMessage
+    ? `<p class="error">${escapeHtml(errorMessage)}</p>`
+    : '';
+  return `<!doctype html>
+<html lang="pt-BR">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Redefinir senha - Scribeflowai</title>
+    <style>
+      body { font-family: sans-serif; padding: 32px; background: #f7fafc; color: #0f172a; }
+      .card { max-width: 440px; margin: 0 auto; background: white; border: 1px solid #dbe4f1; border-radius: 16px; padding: 28px; }
+      h1 { font-size: 24px; margin-top: 0; }
+      label { display: block; font-size: 13px; font-weight: 700; color: #475569; margin-top: 14px; margin-bottom: 6px; }
+      input { width: 100%; padding: 10px 12px; border: 1px solid #dbe4f1; border-radius: 10px; font-size: 15px; box-sizing: border-box; }
+      button { margin-top: 20px; width: 100%; padding: 12px; background: #2563eb; color: #fff; border: none; border-radius: 10px; font-size: 15px; font-weight: 700; cursor: pointer; }
+      p.hint { color: #64748b; font-size: 14px; }
+      p.error { color: #b91c1c; font-weight: 700; }
+    </style>
+  </head>
+  <body>
+    <div class="card">
+      <h1>Redefinir senha</h1>
+      <p class="hint">Crie uma nova senha para sua conta Scribeflowai.</p>
+      ${errorBlock}
+      <form method="POST" action="/auth/reset-password">
+        <input type="hidden" name="token" value="${safeToken}" />
+        <label for="password">Nova senha</label>
+        <input id="password" name="password" type="password" placeholder="Minimo 6 caracteres" required minlength="6" />
+        <label for="confirm_password">Confirmar nova senha</label>
+        <input id="confirm_password" name="confirm_password" type="password" placeholder="Repita a senha" required minlength="6" />
+        <button type="submit">Salvar nova senha</button>
+      </form>
+    </div>
+  </body>
+</html>`;
+}
+
+function buildResetPasswordResultHtml(message) {
+  return `<!doctype html>
+<html lang="pt-BR">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Senha redefinida - Scribeflowai</title>
+    <style>
+      body { font-family: sans-serif; padding: 32px; background: #f7fafc; color: #0f172a; }
+      .card { max-width: 440px; margin: 0 auto; background: white; border: 1px solid #dbe4f1; border-radius: 16px; padding: 28px; }
+      h1 { font-size: 24px; margin-top: 0; }
+    </style>
+  </head>
+  <body>
+    <div class="card">
+      <h1>Tudo certo</h1>
+      <p>${escapeHtml(message)}</p>
     </div>
   </body>
 </html>`;
